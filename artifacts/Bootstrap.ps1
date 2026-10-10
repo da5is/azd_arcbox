@@ -266,6 +266,7 @@ elseif ($flavor -eq "DataOps") {
 if ($flavor -eq "ITPro") {
     Write-Host "Fetching Artifacts for ITPro Flavor"
     Invoke-WebRequest ($templateBaseUrl + "artifacts/ArcServersLogonScript.ps1") -OutFile $Env:ArcBoxDir\ArcServersLogonScript.ps1
+    Invoke-WebRequest ($templateBaseUrl + "artifacts/InstallNestedSqlServer.ps1") -OutFile $Env:ArcBoxDir\InstallNestedSqlServer.ps1
     Invoke-WebRequest ($templateBaseUrl + "artifacts/installArcAgent.ps1") -OutFile $Env:ArcBoxDir\agentScript\installArcAgent.ps1
     Invoke-WebRequest ($templateBaseUrl + "artifacts/installArcAgentUbuntu.sh") -OutFile $Env:ArcBoxDir\agentScript\installArcAgentUbuntu.sh
     Invoke-WebRequest ($templateBaseUrl + "artifacts/icons/arcsql.ico") -OutFile $Env:ArcBoxIconDir\arcsql.ico

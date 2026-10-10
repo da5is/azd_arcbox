@@ -102,6 +102,8 @@ The existing ArcBox deployment checks define readiness; this wrapper does not ad
 
 After deployment, use the printed resource-group link to access `ArcBox-Client` through RDP or Bastion. DataOps uses the domain-qualified username printed by the hook. Retrieve the administrator password from the resource group's Key Vault.
 
+The ITPro flavor includes four SQL guests: the existing prebuilt SQL Server 2022 VM, a Windows Server 2019 guest with SQL Server 2016 SP3 Developer Edition, a Windows Server 2022 guest with SQL Server 2019 Developer Edition, and a Windows Server 2025 guest with SQL Server 2025 Enterprise Developer Edition. The three Windows guests are Arc-enabled and include version-matched AdventureWorksLT databases and the FILESTREAM `ArchiveDB` sample. Developer Edition is for development and testing; SQL Server 2016 must be upgraded to Standard or Enterprise and licensed before it can subscribe to ESUs. Microsoft lists SQL Server 2016 extended support as ending July 14, 2026, with ESU coverage beginning after that date. SQL Server 2019 remains in extended support until January 9, 2030.
+
 The Key Vault has public network access disabled. Its private endpoint is in the ArcBox client subnet, with `privatelink.vaultcore.azure.net` linked to the ArcBox VNet. Retrieve secrets from the client VM or another host with connectivity to that VNet and private DNS resolution; a local Azure CLI login alone does not provide access. DataOps forwards domain-controller DNS queries to Azure DNS so domain-joined clients can also resolve the vault's private endpoint.
 
 If you interrupt the wait or it times out, the lab remains deployed. Inspect `C:\ArcBox\Logs` on the client and resume just the readiness wait without reprovisioning:
@@ -140,7 +142,7 @@ Set overrides with `azd env set <name> <value>` before `azd up`.
 | `JS_GITHUB_ACCOUNT` | `da5is` | Account serving the public `azd_arcbox` automation repository |
 | `JS_GITHUB_BRANCH` | `main` | Published automation branch and DevOps sample-app branch |
 | `JS_GITHUB_USER` | `Azure` | Owner of the `jumpstart-apps` repository used for DevOps GitOps |
-| `JS_SQL_SERVER_EDITION` | `Developer` | Nested SQL Server edition; also accepts `Standard` or `Enterprise` |
+| `JS_SQL_SERVER_EDITION` | `Developer` | Edition of the prebuilt nested SQL Server 2022 VM; also accepts `Standard` or `Enterprise` |
 | `JS_AUTO_SHUTDOWN_ENABLED` | `true` | Enable client VM auto-shutdown after setup |
 | `JS_AUTO_SHUTDOWN_TIME` | `1800` | Client shutdown time in HHmm format |
 | `JS_AUTO_SHUTDOWN_TIMEZONE` | `UTC` | Shutdown schedule timezone |
