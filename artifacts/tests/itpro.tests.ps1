@@ -1,7 +1,12 @@
 
 BeforeDiscovery {
     $namingPrefix = $env:namingPrefix
-    $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02","$namingPrefix-Win2K22","$namingPrefix-Win2K25")
+    $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", "$namingPrefix-Win2K19", "$namingPrefix-Win2K22", "$namingPrefix-Win2K25")
+    $SqlVMs = @(
+        @{ Name = "$namingPrefix-Win2K19"; MajorVersion = 13; DatabaseName = 'AdventureWorksLT2016' }
+        @{ Name = "$namingPrefix-Win2K22"; MajorVersion = 15; DatabaseName = 'AdventureWorksLT2019' }
+        @{ Name = "$namingPrefix-Win2K25"; MajorVersion = 17; DatabaseName = 'AdventureWorksLT2025' }
+    )
     $null = Connect-AzAccount -Identity -Tenant $env:tenantId -Subscription $env:subscriptionId
 }
 
@@ -26,5 +31,30 @@ Describe "<vm>" -ForEach $VMs {
     It "Azure Arc Connected Machine is connected" {
         $connectedMachine = Get-AzConnectedMachine -Name $vm -ResourceGroupName $env:resourceGroup -SubscriptionId $env:subscriptionId
         $connectedMachine.Status | Should -Be "Connected"
+    }
+}
+
+Describe "Nested SQL Server on <Name>" -ForEach $SqlVMs {
+    BeforeAll {
+        $sqlVM = $_
+        $password = ConvertTo-SecureString 'JS123!!' -AsPlainText -Force
+        $credentials = [System.Management.Automation.PSCredential]::new('Administrator', $password)
+    }
+
+    It "has SQL Server major version <MajorVersion> and both sample databases" {
+        $result = Invoke-Command -VMName $sqlVM.Name -Credential $credentials -ScriptBlock {
+            param($databaseName)
+            Import-Module SqlServer -Force
+            Invoke-Sqlcmd -ServerInstance '.' -Query @"
+SELECT
+    CAST(SERVERPROPERTY('ProductMajorVersion') AS int) AS MajorVersion,
+    DB_ID(N'$databaseName') AS SampleDatabaseId,
+    DB_ID(N'ArchiveDB') AS ArchiveDatabaseId;
+"@ -TrustServerCertificate
+        } -ArgumentList $sqlVM.DatabaseName
+
+        $result.MajorVersion | Should -Be $sqlVM.MajorVersion
+        $result.SampleDatabaseId | Should -Not -BeNullOrEmpty
+        $result.ArchiveDatabaseId | Should -Not -BeNullOrEmpty
     }
 }
