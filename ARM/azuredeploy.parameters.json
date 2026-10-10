@@ -1,0 +1,27 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "sshRSAPublicKey": {
+            "value": "<your RSA public key>"
+        },
+        "windowsAdminUsername": {
+            "value": "arcdemo"
+        },
+        "windowsAdminPassword": {
+            "value": "<your Windows administrator password>"
+        },
+        "flavor": {
+            "value": "ITPro"
+        },
+        "deployBastion": {
+            "value": false
+        },
+        "githubUser": {
+            "value": "microsoft"
+        },
+        "sqlServerEdition": {
+            "value": "<Developer|Standard|Enterprise>. Default is Developer edition."
+        }
+    }
+}

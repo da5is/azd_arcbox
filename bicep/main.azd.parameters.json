@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "envName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "flavor": {
+      "value": "${JS_ARCBOX_FLAVOR}"
+    },
+    "windowsAdminUsername": {
+      "value": "${JS_WINDOWS_ADMIN_USERNAME=arcdemo}"
+    },
+    "sshRSAPublicKey": {
+      "value": "${JS_SSH_PUBLIC_KEY}"
+    },
+    "customLocationRPOID": {
+      "value": "${JS_CUSTOM_LOCATION_RP_ID}"
+    },
+    "deployBastion": {
+      "value": "${JS_DEPLOY_BASTION=false}"
+    },
+    "bastionSku": {
+      "value": "${JS_BASTION_SKU=Basic}"
+    },
+    "githubAccount": {
+      "value": "${JS_GITHUB_ACCOUNT=da5is}"
+    },
+    "githubBranch": {
+      "value": "${JS_GITHUB_BRANCH=main}"
+    },
+    "githubUser": {
+      "value": "${JS_GITHUB_USER=Azure}"
+    },
+    "sqlServerEdition": {
+      "value": "${JS_SQL_SERVER_EDITION=Developer}"
+    },
+    "autoShutdownEnabled": {
+      "value": "${JS_AUTO_SHUTDOWN_ENABLED=true}"
+    },
+    "autoShutdownTime": {
+      "value": "${JS_AUTO_SHUTDOWN_TIME=1800}"
+    },
+    "autoShutdownTimezone": {
+      "value": "${JS_AUTO_SHUTDOWN_TIMEZONE=UTC}"
+    },
+    "enableAzureSpotPricing": {
+      "value": "${JS_ENABLE_AZURE_SPOT_PRICING=false}"
+    },
+    "debugEnabled": {
+      "value": "${JS_DEBUG_ENABLED=false}"
+    },
+    "zones": {
+      "value": "${JS_AVAILABILITY_ZONE=1}"
+    }
+  }
+}

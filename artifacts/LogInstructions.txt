@@ -1,0 +1,6 @@
+To upload the log bundle ZIP file for support review, use the following steps command:
+
+1. Create a ZIP file with all the required files
+1. Open an [issue](https://github.com/microsoft/azure_arc/issues/new?assignees=&labels=triage&projects=&template=bug_report.md&title=) with the appropiate title and description. 
+1. Attach the log bundle ZIP file
+1. If extra files/logs are required, these will be asked through the GitHub issue discussion view

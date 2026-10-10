@@ -1,0 +1,63 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "resourceGroup": {
+        "value": "resourceGroup-stage"
+      },
+      "namespace": {
+        "value": "arc"
+      },
+      "connectionMode": {
+        "value": "direct"
+      },
+      "controllerName": {
+        "value": "dataControllerName-stage"
+      },
+      "azdataUsername": {
+        "value": "azdataUsername-stage"
+      },
+      "azdataPassword": {
+        "value": "azdataPassword-stage"
+      },
+      "customLocation": {
+        "value": "customLocation-stage"
+      },
+      "subscriptionId": {
+        "value": "subscriptionId-stage"
+      },
+      "logAnalyticsWorkspaceId": {
+        "value": "logAnalyticsWorkspaceId-stage"
+      },
+      "logAnalyticsPrimaryKey": {
+        "value": "logAnalyticsPrimaryKey-stage"
+      },
+      "dockerRegistryCredential": {
+        "value": "arc-private-registry"
+      },
+      "dataStorageClass": {
+        "value": "storageClass-stage"
+      },
+      "dataStorageSize": {
+        "value": "15Gi"
+      },
+      "logsStorageClass": {
+        "value": "storageClass-stage"
+      },
+      "logsStorageSize": {
+        "value": "10Gi"
+      },
+      "serviceType": {
+        "value": "LoadBalancer"
+      },
+      "controllerPort": {
+        "value": 30080
+      },
+      "apiVersion": {
+        "value": "2023-01-15-preview"
+      },
+      "infrastructure": {
+        "value": "azure"
+      }
+    }
+  }
