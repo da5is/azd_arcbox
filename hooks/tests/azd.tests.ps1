@@ -463,6 +463,135 @@ Describe 'ArcBox ITPro nested memory allocation' {
     }
 }
 
+Describe 'ArcBox SQL extension installation' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1'), [ref]$null, [ref]$null)
+        $function = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Install-ArcBoxSqlExtension'
+        }, $true)
+        . ([scriptblock]::Create($function.Extent.Text))
+    }
+    BeforeEach {
+        $savedArcBoxDir = $env:ArcBoxDir
+        $env:ArcBoxDir = $TestDrive
+        $subscriptionId = 'test-subscription'
+        $resourceGroup = 'test-rg'
+        $resourceTags = 'test=value'
+        $azureLocation = 'eastus2'
+        Mock Start-Sleep {}
+        Mock az { $global:LASTEXITCODE = 0; 'Succeeded' }
+    }
+    AfterEach { $env:ArcBoxDir = $savedArcBoxDir }
+
+    It 'passes valid settings by file rather than inline Windows JSON' {
+        Mock az {
+            $global:LASTEXITCODE = 0
+            $settingsArgument = $Arguments[[array]::IndexOf($Arguments, '--settings') + 1]
+            $settingsArgument | Should -BeLike '@*'
+            $settings = Get-Content $settingsArgument.Substring(1) -Raw | ConvertFrom-Json
+            $settings.LicenseType | Should -Be 'LicenseOnly'
+            $settings.SqlManagement.IsEnabled | Should -BeTrue
+        } -ParameterFilter { $Arguments -contains 'create' }
+        Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType LicenseOnly
+        Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
+        Should -Invoke az -Times 1 -Exactly -ParameterFilter { $Arguments -contains 'show' }
+    }
+
+    It 'stops immediately when extension creation fails' {
+        Mock az { $global:LASTEXITCODE = 9 } -ParameterFilter { $Arguments -contains 'create' }
+        { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*creation failed*exit code 9*'
+        Should -Invoke az -Times 0 -Exactly -ParameterFilter { $Arguments -contains 'show' }
+    }
+
+    It 'surfaces a failed provisioning state' {
+        Mock az { $global:LASTEXITCODE = 0; 'Failed' } -ParameterFilter { $Arguments -contains 'show' }
+        { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw "*state 'Failed'*"
+    }
+
+    It 'surfaces a status lookup failure' {
+        Mock az { $global:LASTEXITCODE = 7 } -ParameterFilter { $Arguments -contains 'show' }
+        { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*read SQL extension status*exit code 7*'
+    }
+
+    It 'times out instead of reporting success for a pending extension' {
+        $script:dateCalls = 0
+        Mock Get-Date {
+            $script:dateCalls++
+            ([datetime]'2026-10-11T00:00:00Z').AddMinutes(16 * ($script:dateCalls - 1))
+        }
+        Mock az { $global:LASTEXITCODE = 0; 'Creating' } -ParameterFilter { $Arguments -contains 'show' }
+        { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*Timed out*'
+    }
+}
+
+Describe 'ArcBox SQL artifact downloads' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\InstallNestedSqlServer.ps1'), [ref]$null, [ref]$null)
+        $function = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Save-SqlDownload'
+        }, $true)
+        . ([scriptblock]::Create($function.Extent.Text))
+        $SqlVersion = '2019'
+    }
+    It 'does not retain an incomplete download as reusable installation media' {
+        Mock Invoke-WebRequest {
+            Set-Content -LiteralPath $OutFile -Value 'incomplete'
+            throw 'Download interrupted'
+        }
+        $path = Join-Path $TestDrive 'sql.iso'
+        { Save-SqlDownload -Uri 'https://example.test/sql.iso' -Path $path } | Should -Throw '*Download interrupted*'
+        Test-Path $path | Should -BeFalse
+        Test-Path "$path.partial" | Should -BeFalse
+        Should -Invoke Invoke-WebRequest -Exactly -Times 1 -ParameterFilter { $TimeoutSec -eq 3600 }
+    }
+}
+
+Describe 'ArcBox SQL setup process limits' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\InstallNestedSqlServer.ps1'), [ref]$null, [ref]$null)
+        $function = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-SqlSetupProcess'
+        }, $true)
+        . ([scriptblock]::Create($function.Extent.Text))
+        $SqlVersion = '2019'
+    }
+    BeforeEach {
+        $script:process = [pscustomobject]@{ Id = 12345; ExitCode = 0; Completed = $true; WaitMilliseconds = 0 }
+        $script:process | Add-Member ScriptMethod WaitForExit {
+            param($milliseconds)
+            $this.WaitMilliseconds = $milliseconds
+            return $this.Completed
+        }
+        $script:process | Add-Member ScriptMethod Refresh {}
+        Mock Start-Process { $script:process }
+        Mock Stop-Process {}
+    }
+    It 'waits at most one hour for setup' {
+        Invoke-SqlSetupProcess -FilePath 'setup.exe' -Arguments @('/Q')
+        $script:process.WaitMilliseconds | Should -Be 3600000
+        Should -Invoke Stop-Process -Exactly -Times 0
+    }
+    It 'stops the specific installer process and fails on timeout' {
+        $script:process.Completed = $false
+        { Invoke-SqlSetupProcess -FilePath 'setup.exe' -Arguments @('/Q') } | Should -Throw '*60-minute limit*'
+        Should -Invoke Stop-Process -Exactly -Times 1 -ParameterFilter { $Id -eq 12345 -and $Force }
+    }
+    It 'fails on an unsuccessful setup exit code' {
+        $script:process.ExitCode = 5
+        { Invoke-SqlSetupProcess -FilePath 'setup.exe' -Arguments @('/Q') } | Should -Throw '*exit code 5*'
+    }
+}
+
 Describe 'ArcBox private Key Vault deployment' {
     BeforeAll {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent

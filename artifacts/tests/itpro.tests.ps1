@@ -48,13 +48,13 @@ Describe "Nested SQL Server on <Name>" -ForEach $SqlVMs {
             Invoke-Sqlcmd -ServerInstance '.' -Query @"
 SELECT
     CAST(SERVERPROPERTY('ProductMajorVersion') AS int) AS MajorVersion,
-    DB_ID(N'$databaseName') AS SampleDatabaseId,
-    DB_ID(N'ArchiveDB') AS ArchiveDatabaseId;
+    ISNULL(DB_ID(N'$databaseName'), 0) AS SampleDatabaseId,
+    ISNULL(DB_ID(N'ArchiveDB'), 0) AS ArchiveDatabaseId;
 "@ -TrustServerCertificate
         } -ArgumentList $sqlVM.DatabaseName
 
         $result.MajorVersion | Should -Be $sqlVM.MajorVersion
-        $result.SampleDatabaseId | Should -Not -BeNullOrEmpty
-        $result.ArchiveDatabaseId | Should -Not -BeNullOrEmpty
+        $result.SampleDatabaseId | Should -BeGreaterThan 0
+        $result.ArchiveDatabaseId | Should -BeGreaterThan 0
     }
 }

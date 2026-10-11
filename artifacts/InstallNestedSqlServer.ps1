@@ -32,6 +32,41 @@ $version = $versions[$SqlVersion]
 $installDirectory = Join-Path $Env:ProgramData "ArcBox\SQLServer$SqlVersion"
 $null = New-Item -Path $installDirectory -ItemType Directory -Force
 
+function Save-SqlDownload {
+    param([string]$Uri, [string]$Path)
+
+    if (Test-Path -LiteralPath $Path) {
+        return
+    }
+    $partialPath = "$Path.partial"
+    Write-Output "Downloading SQL Server $SqlVersion artifact to $Path."
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $partialPath -TimeoutSec 3600
+        Move-Item -LiteralPath $partialPath -Destination $Path -Force
+    } finally {
+        if (Test-Path -LiteralPath $partialPath) {
+            Remove-Item -LiteralPath $partialPath -Force
+        }
+    }
+}
+
+function Invoke-SqlSetupProcess {
+    param([string]$FilePath, [string[]]$Arguments)
+
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru
+    if (-not $process.WaitForExit(3600000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        throw "SQL Server $SqlVersion process '$FilePath' exceeded the 60-minute limit."
+    }
+    $process.Refresh()
+    if ($process.ExitCode -notin @(0, 3010)) {
+        throw "SQL Server $SqlVersion process '$FilePath' failed with exit code $($process.ExitCode)."
+    }
+    if ($process.ExitCode -eq 3010) {
+        Write-Warning "SQL Server $SqlVersion setup requests a guest restart."
+    }
+}
+
 function Invoke-SqlServerSetup {
     param(
         [Parameter(Mandatory)]
@@ -40,26 +75,19 @@ function Invoke-SqlServerSetup {
 
     $isoPath = Join-Path $installDirectory "SQLServer$SqlVersion.iso"
     if ($SqlVersion -eq '2016') {
-        if (-not (Test-Path $isoPath)) {
-            Invoke-WebRequest -UseBasicParsing -Uri $SqlVersionInfo.IsoUrl -OutFile $isoPath
-        }
-    } else {
+        Save-SqlDownload -Uri $SqlVersionInfo.IsoUrl -Path $isoPath
+    } elseif (-not (Test-Path $isoPath)) {
         $bootstrapper = Join-Path $installDirectory "SQLServer$SqlVersion-SSEI-Dev.exe"
-        if (-not (Test-Path $bootstrapper)) {
-            Invoke-WebRequest -UseBasicParsing -Uri $SqlVersionInfo.BootstrapperUrl -OutFile $bootstrapper
-        }
+        Save-SqlDownload -Uri $SqlVersionInfo.BootstrapperUrl -Path $bootstrapper
 
         $downloadArguments = @(
             '/Action=Download'
             '/MediaType=ISO'
-            "/MediaPath=$installDirectory"
+            "/MediaPath=`"$installDirectory`""
             '/Quiet'
             '/Language=en-US'
         )
-        $download = Start-Process -FilePath $bootstrapper -ArgumentList $downloadArguments -Wait -PassThru
-        if ($download.ExitCode -ne 0) {
-            throw "SQL Server $SqlVersion media download failed with exit code $($download.ExitCode)."
-        }
+        Invoke-SqlSetupProcess -FilePath $bootstrapper -Arguments $downloadArguments
 
         $downloadedIso = Get-ChildItem -Path $installDirectory -Filter '*.iso' | Select-Object -First 1
         if ($null -eq $downloadedIso) {
@@ -99,16 +127,12 @@ FILESTREAMSHARENAME="MSSQLSERVER"
 
         $setupArguments = @(
             '/Q'
-            "/ConfigurationFile=$configurationPath"
+            "/ConfigurationFile=`"$configurationPath`""
             '/IACCEPTSQLSERVERLICENSETERMS'
         )
-        $setup = Start-Process -FilePath $setupPath -ArgumentList $setupArguments -Wait -PassThru
-        if ($setup.ExitCode -notin @(0, 3010)) {
-            throw "SQL Server $SqlVersion setup failed with exit code $($setup.ExitCode)."
-        }
+        Invoke-SqlSetupProcess -FilePath $setupPath -Arguments $setupArguments
     } finally {
         Dismount-DiskImage -ImagePath $isoPath
-        Remove-Item -Path $isoPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -136,6 +160,7 @@ if ($null -eq $sqlService -or $sqlService.Status -ne 'Running') {
 Install-PackageProvider -Name NuGet -Force | Out-Null
 Install-Module -Name SqlServer -AllowClobber -Force -Scope AllUsers
 Import-Module SqlServer -Force
+$PSDefaultParameterValues['Invoke-Sqlcmd:AbortOnError'] = $true
 
 $serverInfo = Invoke-Sqlcmd -ServerInstance '.' -Query @'
 SELECT
@@ -170,14 +195,13 @@ if ($null -eq $firewallRule) {
 
 Invoke-Sqlcmd -ServerInstance '.' -Query "EXEC sys.sp_configure N'filestream_access_level', 2; RECONFIGURE;" -TrustServerCertificate
 Restart-Service -Name MSSQLSERVER -Force
+(Get-Service -Name MSSQLSERVER).WaitForStatus('Running', [TimeSpan]::FromMinutes(2))
 
 $backupPath = Join-Path $backupPath "$($version.DatabaseName).bak"
-if (-not (Test-Path $backupPath)) {
-    Invoke-WebRequest -UseBasicParsing -Uri $version.BackupUrl -OutFile $backupPath
-}
+Save-SqlDownload -Uri $version.BackupUrl -Path $backupPath
 
-$databaseExists = Invoke-Sqlcmd -ServerInstance '.' -Query "SELECT DB_ID(N'$($version.DatabaseName)') AS DatabaseId;" -TrustServerCertificate
-if ($null -eq $databaseExists.DatabaseId) {
+$databaseExists = Invoke-Sqlcmd -ServerInstance '.' -Query "SELECT ISNULL(DB_ID(N'$($version.DatabaseName)'), 0) AS DatabaseId;" -TrustServerCertificate
+if ([int]$databaseExists.DatabaseId -eq 0) {
     $fileList = @(Invoke-Sqlcmd -ServerInstance '.' -Query "RESTORE FILELISTONLY FROM DISK = N'$backupPath';" -TrustServerCertificate)
     if ($fileList.Count -eq 0) {
         throw "The AdventureWorks backup for SQL Server $SqlVersion contains no database files."
@@ -207,7 +231,7 @@ if ($null -eq $databaseExists.DatabaseId) {
     }
 
     $restoreQuery = "RESTORE DATABASE [$($version.DatabaseName)] FROM DISK = N'$backupPath' WITH $($moveClauses -join ', '), RECOVERY, STATS=5;"
-    Invoke-Sqlcmd -ServerInstance '.' -Query $restoreQuery -QueryTimeout 0 -TrustServerCertificate
+    Invoke-Sqlcmd -ServerInstance '.' -Query $restoreQuery -QueryTimeout 1800 -TrustServerCertificate
 }
 
 $sampleRecoveryQuery = "ALTER DATABASE [$($version.DatabaseName)] SET RECOVERY FULL;"
@@ -241,11 +265,11 @@ Invoke-Sqlcmd -ServerInstance '.' -Query $archiveDatabaseQuery -TrustServerCerti
 $verification = Invoke-Sqlcmd -ServerInstance '.' -Query @"
 SELECT
     CAST(SERVERPROPERTY('ProductMajorVersion') AS int) AS MajorVersion,
-    DB_ID(N'$($version.DatabaseName)') AS AdventureWorksDatabaseId,
-    DB_ID(N'ArchiveDB') AS ArchiveDatabaseId;
+    ISNULL(DB_ID(N'$($version.DatabaseName)'), 0) AS AdventureWorksDatabaseId,
+    ISNULL(DB_ID(N'ArchiveDB'), 0) AS ArchiveDatabaseId;
 "@ -TrustServerCertificate
 
-if ($null -eq $verification.AdventureWorksDatabaseId -or $null -eq $verification.ArchiveDatabaseId) {
+if ([int]$verification.AdventureWorksDatabaseId -le 0 -or [int]$verification.ArchiveDatabaseId -le 0) {
     throw "SQL Server $SqlVersion installation completed without both sample databases."
 }
 

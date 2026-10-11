@@ -17,6 +17,46 @@ $resourceGroup = $env:resourceGroup
 $resourceTags = $env:resourceTags
 $namingPrefix = $env:namingPrefix
 
+function Install-ArcBoxSqlExtension {
+    param(
+        [Parameter(Mandatory)][string]$MachineName,
+        [Parameter(Mandatory)][ValidateSet('Paid', 'LicenseOnly')][string]$LicenseType
+    )
+
+    $settingsPath = Join-Path $Env:ArcBoxDir "SqlExtension-$MachineName.json"
+    @{
+        LicenseType = $LicenseType
+        SqlManagement = @{ IsEnabled = $true }
+    } | ConvertTo-Json -Depth 3 | Set-Content -Path $settingsPath -Encoding utf8
+    try {
+        # A settings file avoids JSON quote loss through az.cmd on Windows.
+        az connectedmachine extension create --subscription $subscriptionId --machine-name $MachineName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --type 'WindowsAgent.SqlServer' --publisher 'Microsoft.AzureData' --settings "@$settingsPath" --tags $resourceTags --location $azureLocation --only-show-errors --no-wait
+        if ($LASTEXITCODE -ne 0) {
+            throw "SQL extension creation failed on $MachineName (Azure CLI exit code $LASTEXITCODE)."
+        }
+    } finally {
+        Remove-Item -LiteralPath $settingsPath -Force
+    }
+
+    $deadline = (Get-Date).AddMinutes(15)
+    do {
+        $state = az connectedmachine extension show --subscription $subscriptionId --machine-name $MachineName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --query provisioningState --output tsv --only-show-errors
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not read SQL extension status on $MachineName (Azure CLI exit code $LASTEXITCODE)."
+        }
+        if ($state -eq 'Succeeded') {
+            Write-Host "SQL Server extension installed successfully on $MachineName."
+            return
+        }
+        if ($state -in @('Failed', 'Canceled')) {
+            throw "SQL extension on $MachineName entered state '$state'."
+        }
+        Write-Host "Waiting for SQL Server extension on $MachineName (state: $state)."
+        Start-Sleep -Seconds 30
+    } while ((Get-Date) -lt $deadline)
+    throw "Timed out waiting for SQL Server extension on $MachineName (last state: $state)."
+}
+
 # Moved VHD storage account details here to keep only in place to prevent duplicates.
 $vhdSourceFolder = 'https://jumpstartprodsg.blob.core.windows.net/arcbox/prod/*'
 
@@ -277,37 +317,19 @@ if ($Env:flavor -ne 'DevOps') {
 
     # Create SQL server extension as policy to auto deployment is disabled
     Write-Host "Installing SQL Server extension on the Arc-enabled Server.`n"
-    az connectedmachine extension create --machine-name $SQLvmName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --type 'WindowsAgent.SqlServer' --publisher 'Microsoft.AzureData' --settings '{"LicenseType":"Paid", "SqlManagement": {"IsEnabled":true}}' --tags $resourceTags --location $azureLocation --only-show-errors --no-wait
-    Write-Host 'SQL Server extension installation on the Arc-enabled Server successful.'
-
-    $retryCount = 0
-    do {
-        # Verify if Arc-enabled server and SQL server extensions are installed
-        $sqlExtension = Get-AzConnectedMachine -Name $SQLvmName -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty Resource | Where-Object { $PSItem.Name -eq 'WindowsAgent.SqlServer' }
-        if ($sqlExtension -and ($sqlExtension.ProvisioningState -eq 'Succeeded')) {
-            # SQL server extension is installed and ready to run SQL BPA
-            Write-Host "SQL server extension is installed and ready to run SQL BPA.`n"
-            break;
-        } else {
-            # Arc SQL Server extension is not installed or still in progress.
-            $retryCount = $retryCount + 1
-            if ($retryCount -gt 10) {
-                Write-Warning "Timeout exceeded installing SQL server extension. Retry count: $retryCount."
-            } else {
-                Write-Host "Waiting for SQL server extension installation ... Retry count: $retryCount"
-                Start-Sleep(30)
-            }
-        }
-    } while ($retryCount -le 10)
+    Install-ArcBoxSqlExtension -MachineName $SQLvmName -LicenseType Paid
 
     # Azure Monitor Agent extension is deployed automatically using Azure Policy. Wait until extension status is Succeded.
     Write-Host "Installing Azure Monitoring Agent extension.`n"
     az connectedmachine extension create --machine-name $SQLvmName --name AzureMonitorWindowsAgent --publisher Microsoft.Azure.Monitor --type AzureMonitorWindowsAgent --resource-group $resourceGroup --location $azureLocation --only-show-errors --no-wait
+    if ($LASTEXITCODE -ne 0) {
+        throw "Azure Monitor Agent creation failed on $SQLvmName (Azure CLI exit code $LASTEXITCODE)."
+    }
 
     $retryCount = 0
     do {
-        $amaExtension = Get-AzConnectedMachine -Name $SQLvmName -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty Resource | Where-Object { $PSItem.Name -eq 'AzureMonitorWindowsAgent' }
-        if ($amaExtension.StatusCode -eq 0) {
+        $amaExtension = Get-AzConnectedMachineExtension -MachineName $SQLvmName -ResourceGroupName $resourceGroup -Name AzureMonitorWindowsAgent -ErrorAction Stop
+        if ($amaExtension.ProvisioningState -eq 'Succeeded') {
             Write-Host 'Azure Monitoring Agent extension installation complete.'
             break
         } else {
@@ -327,7 +349,7 @@ if ($Env:flavor -ne 'DevOps') {
     $headers = @{'Authorization' = "Bearer $token"; 'Content-Type' = 'application/json' }
 
     # Enable Best practices assessment
-    if ($amaExtension.StatusCode -eq 0) {
+    if ($amaExtension.ProvisioningState -eq 'Succeeded') {
 
         # Create custom log analytics table for SQL assessment
         Write-Host "Creating Log Analytis workspace table for SQL best practices assessment.`n"
@@ -566,8 +588,8 @@ if ($Env:flavor -ne 'DevOps') {
         # Automatically accept unseen keys but will refuse connections for changed or invalid hostkeys.
         Add-Content -Path "$Env:USERPROFILE\.ssh\config" -Value 'StrictHostKeyChecking=accept-new'
 
-        Get-VM *Ubuntu*  | Wait-VM -For Heartbeat
-        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$Env:TEMP\authorized_keys" -DestinationPath "/home/$nestedLinuxUsername/.ssh/" -FileSource Host -Force -CreateFullPath
+        Get-VM *Ubuntu* | Wait-VM -For Heartbeat -Timeout 600 -ErrorAction Stop
+        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$Env:TEMP\authorized_keys" -DestinationPath "/home/$nestedLinuxUsername/.ssh/authorized_keys" -FileSource Host -Force -CreateFullPath -ErrorAction Stop
 
         if ($namingPrefix -ne 'ArcBox') {
 
@@ -592,7 +614,7 @@ if ($Env:flavor -ne 'DevOps') {
 
         }
 
-        Get-VM *Ubuntu* | Wait-VM -For IPAddress
+        Get-VM *Ubuntu* | Wait-VM -For IPAddress -Timeout 600 -ErrorAction Stop
 
         Write-Host 'Waiting for the nested Linux VMs to come back online...waiting for 10 seconds'
 
@@ -608,9 +630,21 @@ if ($Env:flavor -ne 'DevOps') {
         Copy-VMFile $Win2k25vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -DestinationPath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -CreateFullPath -FileSource Host -Force
 
         Write-Header 'Installing SQL Server on nested Windows VMs'
-        Invoke-Command -VMName $Win2k19vmName -ScriptBlock { & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion 2016 } -Credential $winCreds
-        Invoke-Command -VMName $Win2k22vmName -ScriptBlock { & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion 2019 } -Credential $winCreds
-        Invoke-Command -VMName $Win2k25vmName -ScriptBlock { & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion 2025 } -Credential $winCreds
+        foreach ($sqlGuest in @(
+            @{ Name = $Win2k19vmName; Version = '2016' }
+            @{ Name = $Win2k22vmName; Version = '2019' }
+            @{ Name = $Win2k25vmName; Version = '2025' }
+        )) {
+            $tags = Get-AzResourceGroup -Name $resourceGroup -ErrorAction Stop | Select-Object -ExpandProperty Tags
+            if ($null -eq $tags) { $tags = @{} }
+            $tags['DeploymentProgress'] = "Installing SQL Server $($sqlGuest.Version) on $($sqlGuest.Name)"
+            $null = Set-AzResourceGroup -ResourceGroupName $resourceGroup -Tag $tags -ErrorAction Stop
+            Invoke-Command -VMName $sqlGuest.Name -ScriptBlock {
+                param($version)
+                $ErrorActionPreference = 'Stop'
+                & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion $version
+            } -ArgumentList $sqlGuest.Version -Credential $winCreds -ErrorAction Stop
+        }
 
         # Update Linux VM onboarding script connect to Azure Arc, get new token as it might have been expired by the time execution reached this line.
         $accessToken = ConvertFrom-SecureString ((Get-AzAccessToken -AsSecureString).Token) -AsPlainText
@@ -658,29 +692,7 @@ if ($Env:flavor -ne 'DevOps') {
 
         Write-Header 'Installing SQL Server extensions on Arc-enabled Windows VMs'
         foreach ($sqlVmName in @($Win2k19vmName, $Win2k22vmName, $Win2k25vmName)) {
-            az connectedmachine extension create --machine-name $sqlVmName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --type 'WindowsAgent.SqlServer' --publisher 'Microsoft.AzureData' --settings '{"LicenseType":"LicenseOnly", "SqlManagement": {"IsEnabled":true}}' --tags $resourceTags --location $azureLocation --only-show-errors --no-wait
-        }
-
-        $nestedSqlExtensionsReady = $false
-        for ($retryCount = 1; $retryCount -le 20; $retryCount++) {
-            $readyExtensionCount = 0
-            foreach ($sqlVmName in @($Win2k19vmName, $Win2k22vmName, $Win2k25vmName)) {
-                $extension = Get-AzConnectedMachine -Name $sqlVmName -ResourceGroupName $resourceGroup |
-                    Select-Object -ExpandProperty Resource |
-                    Where-Object { $PSItem.Name -eq 'WindowsAgent.SqlServer' -and $PSItem.ProvisioningState -eq 'Succeeded' }
-                if ($extension) {
-                    $readyExtensionCount++
-                }
-            }
-            if ($readyExtensionCount -eq 3) {
-                $nestedSqlExtensionsReady = $true
-                break
-            }
-            Write-Host "Waiting for nested SQL Server extensions ... Retry count: $retryCount"
-            Start-Sleep -Seconds 30
-        }
-        if (-not $nestedSqlExtensionsReady) {
-            throw 'Timed out waiting for SQL Server extensions on the nested Windows VMs.'
+            Install-ArcBoxSqlExtension -MachineName $sqlVmName -LicenseType LicenseOnly
         }
 
         Write-Output 'Onboarding the nested Linux VMs as an Azure Arc-enabled servers'
