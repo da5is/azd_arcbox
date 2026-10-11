@@ -51,7 +51,8 @@ function Install-ArcBoxSqlExtension {
         [Parameter(Mandatory)][ValidateSet('Paid', 'LicenseOnly')][string]$LicenseType
     )
 
-    $state = az connectedmachine extension list --subscription $subscriptionId --machine-name $MachineName --resource-group $resourceGroup --query "[?name=='WindowsAgent.SqlServer'].provisioningState | [0]" --output tsv --only-show-errors
+    $extensionsUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName/extensions?api-version=2024-07-10"
+    $state = az rest --method get --url $extensionsUrl --query "value[?name=='WindowsAgent.SqlServer'].properties.provisioningState | [0]" --output tsv --only-show-errors
     if ($LASTEXITCODE -ne 0) {
         throw "Could not list SQL extensions on $MachineName (Azure CLI exit code $LASTEXITCODE)."
     }
@@ -76,7 +77,7 @@ function Install-ArcBoxSqlExtension {
 
     $deadline = (Get-Date).AddMinutes(15)
     do {
-        $state = az connectedmachine extension list --subscription $subscriptionId --machine-name $MachineName --resource-group $resourceGroup --query "[?name=='WindowsAgent.SqlServer'].provisioningState | [0]" --output tsv --only-show-errors
+        $state = az rest --method get --url $extensionsUrl --query "value[?name=='WindowsAgent.SqlServer'].properties.provisioningState | [0]" --output tsv --only-show-errors
         if ($LASTEXITCODE -ne 0) {
             throw "Could not read SQL extension status on $MachineName (Azure CLI exit code $LASTEXITCODE)."
         }

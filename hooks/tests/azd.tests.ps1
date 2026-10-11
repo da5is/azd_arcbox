@@ -594,7 +594,7 @@ Describe 'ArcBox SQL extension installation' {
         $script:listCalls = 0
         Mock az {
             $global:LASTEXITCODE = 0
-            if ($Arguments -contains 'list') {
+            if ($Arguments -contains 'rest') {
                 $script:listCalls++
                 if ($script:listCalls -gt 1) { 'Succeeded' }
             }
@@ -613,22 +613,27 @@ Describe 'ArcBox SQL extension installation' {
         } -ParameterFilter { $Arguments -contains 'create' }
         Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType LicenseOnly
         Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
-        Should -Invoke az -Times 2 -Exactly -ParameterFilter { $Arguments -contains 'list' }
+        Should -Invoke az -Times 2 -Exactly -ParameterFilter { $Arguments -contains 'rest' }
+        Should -Invoke az -Times 2 -Exactly -ParameterFilter {
+            $Arguments -contains 'rest' -and
+            $Arguments -contains 'value[?name==''WindowsAgent.SqlServer''].properties.provisioningState | [0]' -and
+            ($Arguments -join ' ') -like '*Microsoft.HybridCompute/machines/test-vm/extensions?api-version=2024-07-10*'
+        }
     }
 
     It 'stops immediately when extension creation fails' {
         Mock az { $global:LASTEXITCODE = 9 } -ParameterFilter { $Arguments -contains 'create' }
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*creation failed*exit code 9*'
-        Should -Invoke az -Times 1 -Exactly -ParameterFilter { $Arguments -contains 'list' }
+        Should -Invoke az -Times 1 -Exactly -ParameterFilter { $Arguments -contains 'rest' }
     }
 
     It 'surfaces a failed provisioning state' {
-        Mock az { $global:LASTEXITCODE = 0; 'Failed' } -ParameterFilter { $Arguments -contains 'list' }
+        Mock az { $global:LASTEXITCODE = 0; 'Failed' } -ParameterFilter { $Arguments -contains 'rest' }
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw "*state 'Failed'*"
     }
 
     It 'surfaces a status lookup failure' {
-        Mock az { $global:LASTEXITCODE = 7 } -ParameterFilter { $Arguments -contains 'list' }
+        Mock az { $global:LASTEXITCODE = 7 } -ParameterFilter { $Arguments -contains 'rest' }
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*list SQL extensions*exit code 7*'
     }
 
@@ -638,7 +643,7 @@ Describe 'ArcBox SQL extension installation' {
             $script:dateCalls++
             ([datetime]'2026-10-11T00:00:00Z').AddMinutes(16 * ($script:dateCalls - 1))
         }
-        Mock az { $global:LASTEXITCODE = 0; 'Creating' } -ParameterFilter { $Arguments -contains 'list' }
+        Mock az { $global:LASTEXITCODE = 0; 'Creating' } -ParameterFilter { $Arguments -contains 'rest' }
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*Timed out*'
     }
     It 'tolerates an extension not yet visible after asynchronous creation' {
@@ -646,12 +651,12 @@ Describe 'ArcBox SQL extension installation' {
             $global:LASTEXITCODE = 0
             $script:listCalls++
             if ($script:listCalls -gt 2) { 'Succeeded' }
-        } -ParameterFilter { $Arguments -contains 'list' }
+        } -ParameterFilter { $Arguments -contains 'rest' }
         Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid
         Should -Invoke Start-Sleep -Exactly -Times 1
     }
     It 'does not recreate an already successful extension' {
-        Mock az { $global:LASTEXITCODE = 0; 'Succeeded' } -ParameterFilter { $Arguments -contains 'list' }
+        Mock az { $global:LASTEXITCODE = 0; 'Succeeded' } -ParameterFilter { $Arguments -contains 'rest' }
         Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid
         Should -Invoke az -Exactly -Times 0 -ParameterFilter { $Arguments -contains 'create' }
     }
