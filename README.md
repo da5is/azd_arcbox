@@ -110,6 +110,8 @@ Additional SQL installations report a separate resource-group progress stage for
 
 SQL extension polling tolerates an initially absent extension after asynchronous creation and skips an already successful extension. SQL setup reboot requests return control to the host, which restarts the guest and resumes database provisioning. Terminating setup errors set `DeploymentProgress=Failed` so the local waiter stops promptly. Recovering a stopped client requires restarting VM-side setup, not just the `postprovision` waiter; preserve existing SSH keys and do not start a second provisioning worker.
 
+Retries reuse existing guest VHDs and download only missing disks through temporary staging files; paths still attached to a VM are not replaced. Linux Arc onboarding stops on command failures and reuses an existing connection only when it belongs to the requested subscription and resource group.
+
 The Key Vault has public network access disabled. Its private endpoint is in the ArcBox client subnet, with `privatelink.vaultcore.azure.net` linked to the ArcBox VNet. Retrieve secrets from the client VM or another host with connectivity to that VNet and private DNS resolution; a local Azure CLI login alone does not provide access. DataOps forwards domain-controller DNS queries to Azure DNS so domain-joined clients can also resolve the vault's private endpoint.
 
 If you interrupt the wait or it times out, the lab remains deployed. Inspect `C:\ArcBox\Logs` on the client and resume just the readiness wait without reprovisioning:

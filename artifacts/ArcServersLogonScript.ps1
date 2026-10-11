@@ -17,6 +17,34 @@ $resourceGroup = $env:resourceGroup
 $resourceTags = $env:resourceTags
 $namingPrefix = $env:namingPrefix
 
+function Save-ArcBoxGuestDisk {
+    param([string]$SourceName, [string]$DestinationPath)
+
+    if (Test-Path -LiteralPath $DestinationPath) {
+        Write-Host "Reusing guest disk $DestinationPath."
+        return
+    }
+    $attachedDisks = @(Get-VM -ErrorAction Stop | Get-VMHardDiskDrive -ErrorAction Stop)
+    if ($attachedDisks.Path -contains $DestinationPath) {
+        throw "Refusing to download over an attached guest disk: $DestinationPath."
+    }
+    $temporaryPath = "$DestinationPath.download"
+    try {
+        azcopy cp ($vhdSourceFolder.TrimEnd('*') + $SourceName) $temporaryPath --overwrite=true --check-length=true --log-level=ERROR
+        if ($LASTEXITCODE -ne 0) {
+            throw "Guest VHD download failed for $SourceName (AzCopy exit code $LASTEXITCODE)."
+        }
+        if (-not (Test-Path -LiteralPath $temporaryPath) -or (Get-Item -LiteralPath $temporaryPath).Length -eq 0) {
+            throw "Guest VHD download produced no data for $SourceName."
+        }
+        Move-Item -LiteralPath $temporaryPath -Destination $DestinationPath -ErrorAction Stop
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction Stop
+        }
+    }
+}
+
 function Install-ArcBoxSqlExtension {
     param(
         [Parameter(Mandatory)][string]$MachineName,
@@ -245,16 +273,7 @@ if ($Env:flavor -ne 'DevOps') {
     $SQLvmvhdPath = "$Env:ArcBoxVMDir\$namingPrefix-SQL.vhdx"
 
     # Verify if VHD files already downloaded especially when re-running this script
-    if (!(Test-Path $SQLvmvhdPath)) {
-        Write-Output 'Downloading nested VMs VHDX file for SQL. This can take some time, hold tight...'
-        azcopy cp $vhdSourceFolder $Env:ArcBoxVMDir --include-pattern "$vhdImageToDownload" --recursive=true --check-length=false --log-level=ERROR
-        if ($LASTEXITCODE -ne 0) {
-            throw "SQL guest VHD download failed (AzCopy exit code $LASTEXITCODE)."
-        }
-
-        # Rename VHD file
-        Rename-Item -Path "$Env:ArcBoxVMDir\$vhdImageToDownload" -NewName $SQLvmvhdPath -Force
-    }
+    Save-ArcBoxGuestDisk -SourceName $vhdImageToDownload -DestinationPath $SQLvmvhdPath
 
     # Create the nested VMs if not already created
     Write-Header 'Create Hyper-V VMs'
@@ -494,37 +513,10 @@ if ($Env:flavor -ne 'DevOps') {
         $null = Set-AzResourceGroup -ResourceGroupName $env:resourceGroup -Tag $tags
         $null = Set-AzResource -ResourceName $env:computername -ResourceGroupName $env:resourceGroup -ResourceType 'microsoft.compute/virtualmachines' -Tag $tags -Force
 
-        # Verify if VHD files already downloaded especially when re-running this script
-        if (!((Test-Path $Win2k19vmvhdPath) -and (Test-Path $Win2K25vmvhdPath) -and (Test-Path $Win2k22vmvhdPath) -and (Test-Path $Ubuntu01vmvhdPath) -and (Test-Path $Ubuntu02vmvhdPath))) {
-            <# Action when all if and elseif conditions are false #>
-            $Env:AZCOPY_BUFFER_GB = 4
-            Write-Output 'Downloading nested VMs VHDX files. This can take some time, hold tight...'
-            azcopy cp $vhdSourceFolder $Env:ArcBoxVMDir --include-pattern $files --recursive=true --check-length=false --log-level=ERROR
-            if ($LASTEXITCODE -ne 0) {
-                throw "ITPro guest VHD downloads failed (AzCopy exit code $LASTEXITCODE)."
-            }
-        }
-
-        if ($namingPrefix -ne 'ArcBox') {
-
-            # Split the string into an array
-            $fileList = $files -split ';' | Where-Object { $_ -ne '' }
-
-            # Set the path to search for files
-            $searchPath = $Env:ArcBoxVMDir
-
-            # Loop through each file and rename if found
-            foreach ($file in $fileList) {
-                $filePath = Join-Path -Path $searchPath -ChildPath $file
-                if (Test-Path $filePath) {
-                    $newFileName = $file -replace 'ArcBox', $namingPrefix
-
-                    Rename-Item -Path $filePath -NewName $newFileName
-                    Write-Output "Renamed $file to $newFileName"
-                } else {
-                    Write-Output "$file not found in $searchPath"
-                }
-            }
+        $Env:AZCOPY_BUFFER_GB = 4
+        foreach ($file in ($files -split ';' | Where-Object { $_ })) {
+            $destinationPath = Join-Path $Env:ArcBoxVMDir ($file -replace '^ArcBox', $namingPrefix)
+            Save-ArcBoxGuestDisk -SourceName $file -DestinationPath $destinationPath
         }
 
         # Update disk IOPS and throughput after downloading nested VMs (note: a disk's performance tier can be downgraded only once every 12 hours)
@@ -703,7 +695,7 @@ if ($Env:flavor -ne 'DevOps') {
 
         # Update Linux VM onboarding script connect to Azure Arc, get new token as it might have been expired by the time execution reached this line.
         $accessToken = ConvertFrom-SecureString ((Get-AzAccessToken -AsSecureString).Token) -AsPlainText
-        (Get-Content -Path "$agentScript\installArcAgentUbuntu.sh" -Raw) -replace '\$accessToken', "'$accessToken'" -replace '\$resourceGroup', "'$resourceGroup'" -replace '\$tenantId', "'$Env:tenantId'" -replace '\$azureLocation', "'$Env:azureLocation'" -replace '\$subscriptionId', "'$subscriptionId'" | Set-Content -Path "$agentScript\installArcAgentModifiedUbuntu.sh"
+        (Get-Content -Path "$agentScript\installArcAgentUbuntu.sh" -Raw) -replace '\$accessToken', $accessToken -replace '\$resourceGroup', $resourceGroup -replace '\$tenantId', $Env:tenantId -replace '\$azureLocation', $Env:azureLocation -replace '\$subscriptionId', $subscriptionId | Set-Content -Path "$agentScript\installArcAgentModifiedUbuntu.sh"
 
         # Copy installation script to nested Linux VMs
         Write-Output 'Transferring installation script to nested Linux VMs...'

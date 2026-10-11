@@ -475,7 +475,7 @@ Describe 'ArcBox guest provisioning safeguards' {
             $node -is [System.Management.Automation.Language.CommandAst] -and
                 $node.GetCommandName() -in @('azcopy', 'winget')
         }, $true))
-        $commands.Count | Should -Be 4
+        $commands.Count | Should -Be 3
         foreach ($command in $commands) {
             $following = $source.Substring($command.Extent.EndOffset)
             $following | Should -Match '^\s+if \(\$LASTEXITCODE -ne 0\) \{\s+throw '
@@ -509,6 +509,65 @@ Describe 'ArcBox guest provisioning safeguards' {
         $script:configuredGuests.Count | Should -Be 6
         $script:configuredGuests | Should -Contain 'test-SQL'
         $source | Should -Not -Match 'Stop-VM'
+    }
+}
+
+Describe 'ArcBox retry-safe guest disks' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1'), [ref]$null, [ref]$null)
+        $function = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Save-ArcBoxGuestDisk'
+        }, $true)
+        . ([scriptblock]::Create($function.Extent.Text))
+        function Get-VM {}
+        function Get-VMHardDiskDrive {}
+        function azcopy { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) }
+    }
+    BeforeEach {
+        $vhdSourceFolder = 'https://example.test/disks/*'
+        Mock Get-VM { [pscustomobject]@{ Name = 'test-vm' } }
+        Mock Get-VMHardDiskDrive {}
+        Mock azcopy {
+            $global:LASTEXITCODE = 0
+            Set-Content -LiteralPath $Arguments[2] -Value 'disk-data'
+        }
+    }
+    It 'does not touch an existing guest disk' {
+        $path = Join-Path $TestDrive 'existing.vhdx'
+        Set-Content $path 'existing-data'
+        Save-ArcBoxGuestDisk -SourceName 'ArcBox-Win2K19.vhdx' -DestinationPath $path
+        Get-Content $path | Should -Be 'existing-data'
+        Should -Invoke azcopy -Exactly -Times 0
+    }
+    It 'downloads only the requested missing disk into a staging file' {
+        $path = Join-Path $TestDrive 'missing.vhdx'
+        Save-ArcBoxGuestDisk -SourceName 'ArcBox-Win2K19.vhdx' -DestinationPath $path
+        Get-Content $path | Should -Be 'disk-data'
+        Test-Path "$path.download" | Should -BeFalse
+        Should -Invoke azcopy -Exactly -Times 1 -ParameterFilter {
+            $Arguments[1] -eq 'https://example.test/disks/ArcBox-Win2K19.vhdx' -and
+            $Arguments[2] -eq "$path.download"
+        }
+    }
+    It 'refuses a missing path still attached to a VM' {
+        $path = Join-Path $TestDrive 'attached.vhdx'
+        $script:attachedPath = $path
+        Mock Get-VMHardDiskDrive { [pscustomobject]@{ Path = $script:attachedPath } }
+        { Save-ArcBoxGuestDisk -SourceName 'ArcBox-Win2K19.vhdx' -DestinationPath $path } | Should -Throw '*attached guest disk*'
+        Should -Invoke azcopy -Exactly -Times 0
+    }
+    It 'cleans failed downloads without publishing a guest disk' {
+        Mock azcopy {
+            Set-Content -LiteralPath $Arguments[2] -Value 'partial'
+            $global:LASTEXITCODE = 8
+        }
+        $path = Join-Path $TestDrive 'failed.vhdx'
+        { Save-ArcBoxGuestDisk -SourceName 'ArcBox-Win2K19.vhdx' -DestinationPath $path } | Should -Throw '*exit code 8*'
+        Test-Path $path | Should -BeFalse
+        Test-Path "$path.download" | Should -BeFalse
     }
 }
 
