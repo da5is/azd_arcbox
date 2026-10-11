@@ -483,7 +483,14 @@ Describe 'ArcBox SQL extension installation' {
         $resourceTags = 'test=value'
         $azureLocation = 'eastus2'
         Mock Start-Sleep {}
-        Mock az { $global:LASTEXITCODE = 0; 'Succeeded' }
+        $script:listCalls = 0
+        Mock az {
+            $global:LASTEXITCODE = 0
+            if ($Arguments -contains 'list') {
+                $script:listCalls++
+                if ($script:listCalls -gt 1) { 'Succeeded' }
+            }
+        }
     }
     AfterEach { $env:ArcBoxDir = $savedArcBoxDir }
 
@@ -498,23 +505,23 @@ Describe 'ArcBox SQL extension installation' {
         } -ParameterFilter { $Arguments -contains 'create' }
         Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType LicenseOnly
         Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
-        Should -Invoke az -Times 1 -Exactly -ParameterFilter { $Arguments -contains 'show' }
+        Should -Invoke az -Times 2 -Exactly -ParameterFilter { $Arguments -contains 'list' }
     }
 
     It 'stops immediately when extension creation fails' {
         Mock az { $global:LASTEXITCODE = 9 } -ParameterFilter { $Arguments -contains 'create' }
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*creation failed*exit code 9*'
-        Should -Invoke az -Times 0 -Exactly -ParameterFilter { $Arguments -contains 'show' }
+        Should -Invoke az -Times 1 -Exactly -ParameterFilter { $Arguments -contains 'list' }
     }
 
     It 'surfaces a failed provisioning state' {
-        Mock az { $global:LASTEXITCODE = 0; 'Failed' } -ParameterFilter { $Arguments -contains 'show' }
+        Mock az { $global:LASTEXITCODE = 0; 'Failed' } -ParameterFilter { $Arguments -contains 'list' }
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw "*state 'Failed'*"
     }
 
     It 'surfaces a status lookup failure' {
-        Mock az { $global:LASTEXITCODE = 7 } -ParameterFilter { $Arguments -contains 'show' }
-        { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*read SQL extension status*exit code 7*'
+        Mock az { $global:LASTEXITCODE = 7 } -ParameterFilter { $Arguments -contains 'list' }
+        { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*list SQL extensions*exit code 7*'
     }
 
     It 'times out instead of reporting success for a pending extension' {
@@ -523,8 +530,22 @@ Describe 'ArcBox SQL extension installation' {
             $script:dateCalls++
             ([datetime]'2026-10-11T00:00:00Z').AddMinutes(16 * ($script:dateCalls - 1))
         }
-        Mock az { $global:LASTEXITCODE = 0; 'Creating' } -ParameterFilter { $Arguments -contains 'show' }
+        Mock az { $global:LASTEXITCODE = 0; 'Creating' } -ParameterFilter { $Arguments -contains 'list' }
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*Timed out*'
+    }
+    It 'tolerates an extension not yet visible after asynchronous creation' {
+        Mock az {
+            $global:LASTEXITCODE = 0
+            $script:listCalls++
+            if ($script:listCalls -gt 2) { 'Succeeded' }
+        } -ParameterFilter { $Arguments -contains 'list' }
+        Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid
+        Should -Invoke Start-Sleep -Exactly -Times 1
+    }
+    It 'does not recreate an already successful extension' {
+        Mock az { $global:LASTEXITCODE = 0; 'Succeeded' } -ParameterFilter { $Arguments -contains 'list' }
+        Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid
+        Should -Invoke az -Exactly -Times 0 -ParameterFilter { $Arguments -contains 'create' }
     }
 }
 
@@ -566,6 +587,7 @@ Describe 'ArcBox SQL setup process limits' {
         $SqlVersion = '2019'
     }
     BeforeEach {
+        $installDirectory = $TestDrive
         $script:process = [pscustomobject]@{ Id = 12345; ExitCode = 0; Completed = $true; WaitMilliseconds = 0 }
         $script:process | Add-Member ScriptMethod WaitForExit {
             param($milliseconds)
@@ -574,21 +596,27 @@ Describe 'ArcBox SQL setup process limits' {
         }
         $script:process | Add-Member ScriptMethod Refresh {}
         Mock Start-Process { $script:process }
-        Mock Stop-Process {}
+        function taskkill.exe { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) }
+        Mock taskkill.exe { $global:LASTEXITCODE = 0 }
     }
     It 'waits at most one hour for setup' {
         Invoke-SqlSetupProcess -FilePath 'setup.exe' -Arguments @('/Q')
         $script:process.WaitMilliseconds | Should -Be 3600000
-        Should -Invoke Stop-Process -Exactly -Times 0
+        Should -Invoke taskkill.exe -Exactly -Times 0
     }
     It 'stops the specific installer process and fails on timeout' {
         $script:process.Completed = $false
         { Invoke-SqlSetupProcess -FilePath 'setup.exe' -Arguments @('/Q') } | Should -Throw '*60-minute limit*'
-        Should -Invoke Stop-Process -Exactly -Times 1 -ParameterFilter { $Id -eq 12345 -and $Force }
+        Should -Invoke taskkill.exe -Exactly -Times 1 -ParameterFilter { $Arguments -contains '12345' -and $Arguments -contains '/T' }
     }
     It 'fails on an unsuccessful setup exit code' {
         $script:process.ExitCode = 5
         { Invoke-SqlSetupProcess -FilePath 'setup.exe' -Arguments @('/Q') } | Should -Throw '*exit code 5*'
+    }
+    It 'signals a required guest restart rather than proceeding to databases' {
+        $script:process.ExitCode = 3010
+        Invoke-SqlSetupProcess -FilePath 'setup.exe' -Arguments @('/Q')
+        Test-Path (Join-Path $TestDrive 'RestartRequired') | Should -BeTrue
     }
 }
 

@@ -23,6 +23,14 @@ function Install-ArcBoxSqlExtension {
         [Parameter(Mandatory)][ValidateSet('Paid', 'LicenseOnly')][string]$LicenseType
     )
 
+    $state = az connectedmachine extension list --subscription $subscriptionId --machine-name $MachineName --resource-group $resourceGroup --query "[?name=='WindowsAgent.SqlServer'].provisioningState | [0]" --output tsv --only-show-errors
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not list SQL extensions on $MachineName (Azure CLI exit code $LASTEXITCODE)."
+    }
+    if ($state -eq 'Succeeded') {
+        Write-Host "SQL Server extension already installed on $MachineName."
+        return
+    }
     $settingsPath = Join-Path $Env:ArcBoxDir "SqlExtension-$MachineName.json"
     @{
         LicenseType = $LicenseType
@@ -40,7 +48,7 @@ function Install-ArcBoxSqlExtension {
 
     $deadline = (Get-Date).AddMinutes(15)
     do {
-        $state = az connectedmachine extension show --subscription $subscriptionId --machine-name $MachineName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --query provisioningState --output tsv --only-show-errors
+        $state = az connectedmachine extension list --subscription $subscriptionId --machine-name $MachineName --resource-group $resourceGroup --query "[?name=='WindowsAgent.SqlServer'].provisioningState | [0]" --output tsv --only-show-errors
         if ($LASTEXITCODE -ne 0) {
             throw "Could not read SQL extension status on $MachineName (Azure CLI exit code $LASTEXITCODE)."
         }
@@ -69,6 +77,7 @@ if (Test-Path $logFilePath) {
 
 Start-Transcript -Path $logFilePath -Force -ErrorAction SilentlyContinue
 
+try {
 # Remove registry keys that are used to automatically logon the user (only used for first-time setup)
 $registryPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 $keys = @('AutoAdminLogon', 'DefaultUserName', 'DefaultPassword')
@@ -186,6 +195,7 @@ if ($Env:flavor -ne 'DevOps') {
     $tags = Get-AzResourceGroup -Name $env:resourceGroup | Select-Object -ExpandProperty Tags
 
     if ($null -ne $tags) {
+        $tags.Remove('DeploymentStatus')
         $tags['DeploymentProgress'] = $DeploymentProgressString
     } else {
         $tags = @{'DeploymentProgress' = $DeploymentProgressString }
@@ -293,7 +303,10 @@ if ($Env:flavor -ne 'DevOps') {
     # Onboarding the nested VMs as Azure Arc-enabled servers
     Write-Output 'Onboarding the nested Windows VMs as Azure Arc-enabled servers'
     $accessToken = ConvertFrom-SecureString ((Get-AzAccessToken -AsSecureString).Token) -AsPlainText
-    Invoke-Command -VMName $SQLvmName -ScriptBlock { powershell -File $Using:nestedVMArcBoxDir\installArcAgent.ps1 -accessToken $using:accessToken, -tenantId $Using:tenantId, -subscriptionId $Using:subscriptionId, -resourceGroup $Using:resourceGroup, -azureLocation $Using:azureLocation } -Credential $winCreds
+    Invoke-Command -VMName $SQLvmName -ScriptBlock {
+        $ErrorActionPreference = 'Stop'
+        & "$Using:nestedVMArcBoxDir\installArcAgent.ps1" -accessToken $using:accessToken -tenantId $Using:tenantId -subscriptionId $Using:subscriptionId -resourceGroup $Using:resourceGroup -azureLocation $Using:azureLocation
+    } -Credential $winCreds -ErrorAction Stop
 
     # Wait for the Arc-enabled server installation to be completed
     $retryCount = 0
@@ -307,7 +320,7 @@ if ($Env:flavor -ne 'DevOps') {
             $retryCount = $retryCount + 1
             if ($retryCount -gt 5) {
                 Write-Host "WARNING: Timeout exceeded for onboarding nested SQL VM as Azure Arc-enabled server ... Retry count: $retryCount."
-                Exit
+                throw 'Timed out onboarding the nested SQL VM.'
             } else {
                 Write-Host "Waiting for onboarding nested SQL VM as Azure Arc-enabled server ... Retry count: $retryCount"
                 Start-Sleep(30)
@@ -568,7 +581,7 @@ if ($Env:flavor -ne 'DevOps') {
             Write-Host 'Waiting for the nested Windows VMs to come back online...'
 
             Get-VM *Win* | Restart-VM -Force
-            Get-VM *Win* | Wait-VM -For Heartbeat
+            Get-VM *Win* | Wait-VM -For Heartbeat -Timeout 600 -ErrorAction Stop
 
 
         }
@@ -580,8 +593,14 @@ if ($Env:flavor -ne 'DevOps') {
         # Configuring SSH for accessing Linux VMs
         Write-Output 'Generating SSH key for accessing nested Linux VMs'
 
-        $null = New-Item -Path ~ -Name .ssh -ItemType Directory
-        ssh-keygen -t rsa -N '' -f $Env:USERPROFILE\.ssh\id_rsa
+        $null = New-Item -Path ~ -Name .ssh -ItemType Directory -Force
+        if (-not (Test-Path "$Env:USERPROFILE\.ssh\id_rsa")) {
+            ssh-keygen -t rsa -N '' -f $Env:USERPROFILE\.ssh\id_rsa
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to generate the nested guest SSH key.' }
+        }
+        if (-not (Test-Path "$Env:USERPROFILE\.ssh\id_rsa.pub")) {
+            throw 'The nested guest SSH public key is missing; preserve the private key and recover its public key before retrying.'
+        }
 
         Copy-Item -Path "$Env:USERPROFILE\.ssh\id_rsa.pub" -Destination "$Env:TEMP\authorized_keys"
 
@@ -644,6 +663,32 @@ if ($Env:flavor -ne 'DevOps') {
                 $ErrorActionPreference = 'Stop'
                 & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion $version
             } -ArgumentList $sqlGuest.Version -Credential $winCreds -ErrorAction Stop
+            $restartRequired = Invoke-Command -VMName $sqlGuest.Name -Credential $winCreds -ErrorAction Stop -ScriptBlock {
+                param($version)
+                Test-Path "$env:ProgramData\ArcBox\SQLServer$version\RestartRequired"
+            } -ArgumentList $sqlGuest.Version
+            if ($restartRequired) {
+                Restart-VM -Name $sqlGuest.Name -Force -ErrorAction Stop
+                Get-VM -Name $sqlGuest.Name | Wait-VM -For Heartbeat -Timeout 600 -ErrorAction Stop
+                $guestReady = $false
+                for ($attempt = 0; $attempt -lt 60; $attempt++) {
+                    try {
+                        Invoke-Command -VMName $sqlGuest.Name -Credential $winCreds -ErrorAction Stop -ScriptBlock { $null = Get-Service MSSQLSERVER -ErrorAction Stop }
+                        $guestReady = $true
+                        break
+                    } catch {
+                        if ($attempt -eq 59) { throw }
+                        Start-Sleep -Seconds 10
+                    }
+                }
+                if (-not $guestReady) { throw "Guest $($sqlGuest.Name) did not become ready after SQL setup restart." }
+                Invoke-Command -VMName $sqlGuest.Name -Credential $winCreds -ErrorAction Stop -ScriptBlock {
+                    param($version)
+                    $ErrorActionPreference = 'Stop'
+                    Remove-Item "$env:ProgramData\ArcBox\SQLServer$version\RestartRequired" -Force
+                    & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion $version
+                } -ArgumentList $sqlGuest.Version
+            }
         }
 
         # Update Linux VM onboarding script connect to Azure Arc, get new token as it might have been expired by the time execution reached this line.
@@ -653,7 +698,7 @@ if ($Env:flavor -ne 'DevOps') {
         # Copy installation script to nested Linux VMs
         Write-Output 'Transferring installation script to nested Linux VMs...'
 
-        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername" -FileSource Host -Force
+        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh" -FileSource Host -Force -ErrorAction Stop
 
         Write-Output 'Activating operating system on Windows VMs...'
 
@@ -688,7 +733,10 @@ if ($Env:flavor -ne 'DevOps') {
 
         # Onboarding the nested VMs as Azure Arc-enabled servers
         Write-Output 'Onboarding the nested Windows VMs as Azure Arc-enabled servers'
-        Invoke-Command -VMName $Win2k19vmName, $Win2k22vmName, $Win2k25vmName -ScriptBlock { powershell -File $Using:nestedVMArcBoxDir\installArcAgent.ps1 -accessToken $using:accessToken, -tenantId $Using:tenantId, -subscriptionId $Using:subscriptionId, -resourceGroup $Using:resourceGroup, -azureLocation $Using:azureLocation } -Credential $winCreds
+        Invoke-Command -VMName $Win2k19vmName, $Win2k22vmName, $Win2k25vmName -ScriptBlock {
+            $ErrorActionPreference = 'Stop'
+            & "$Using:nestedVMArcBoxDir\installArcAgent.ps1" -accessToken $using:accessToken -tenantId $Using:tenantId -subscriptionId $Using:subscriptionId -resourceGroup $Using:resourceGroup -azureLocation $Using:azureLocation
+        } -Credential $winCreds -ErrorAction Stop
 
         Write-Header 'Installing SQL Server extensions on Arc-enabled Windows VMs'
         foreach ($sqlVmName in @($Win2k19vmName, $Win2k22vmName, $Win2k25vmName)) {
@@ -696,7 +744,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Output 'Onboarding the nested Linux VMs as an Azure Arc-enabled servers'
-        $UbuntuSessions = New-PSSession -HostName $Ubuntu01VmIp, $Ubuntu02VmIp -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername
+        $UbuntuSessions = New-PSSession -HostName $Ubuntu01VmIp, $Ubuntu02VmIp -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername -ConnectingTimeout 60000 -ErrorAction Stop
         Invoke-JSSudoCommand -Session $UbuntuSessions -Command "sh /home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'
@@ -788,4 +836,19 @@ if ($Env:flavor -eq 'ITPro') {
 
     & "$Env:ArcBoxTestsDir\Invoke-Test.ps1"
 
+}
+} catch {
+    $setupError = $_
+    try {
+        $tags = Get-AzResourceGroup -Name $resourceGroup -ErrorAction Stop | Select-Object -ExpandProperty Tags
+        if ($null -eq $tags) { $tags = @{} }
+        $tags['DeploymentProgress'] = 'Failed'
+        $tags['DeploymentStatus'] = 'VM setup failed. Inspect C:\ArcBox\Logs\ArcServersLogonScript.log.'
+        $null = Set-AzResourceGroup -ResourceGroupName $resourceGroup -Tag $tags -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not publish VM setup failure: $($_.Exception.Message)"
+    }
+    throw $setupError
+} finally {
+    Stop-Transcript -ErrorAction Continue
 }

@@ -108,6 +108,8 @@ ITPro allocates 6 GB to the prebuilt SQL guest, 4 GB to each additional Windows 
 
 Additional SQL installations report a separate resource-group progress stage for each version. Artifact downloads and installer processes have 60-minute limits; database restores have a 30-minute limit. Failed downloads are not reused as valid media. SQL extension creation errors, failed provisioning, or a 15-minute extension wait timeout stop setup instead of reporting success. Inspect SQL setup logs under `C:\Program Files\Microsoft SQL Server\<version>\Setup Bootstrap\Log` inside the affected guest if installation fails.
 
+SQL extension polling tolerates an initially absent extension after asynchronous creation and skips an already successful extension. SQL setup reboot requests return control to the host, which restarts the guest and resumes database provisioning. Terminating setup errors set `DeploymentProgress=Failed` so the local waiter stops promptly. Recovering a stopped client requires restarting VM-side setup, not just the `postprovision` waiter; preserve existing SSH keys and do not start a second provisioning worker.
+
 The Key Vault has public network access disabled. Its private endpoint is in the ArcBox client subnet, with `privatelink.vaultcore.azure.net` linked to the ArcBox VNet. Retrieve secrets from the client VM or another host with connectivity to that VNet and private DNS resolution; a local Azure CLI login alone does not provide access. DataOps forwards domain-controller DNS queries to Azure DNS so domain-joined clients can also resolve the vault's private endpoint.
 
 If you interrupt the wait or it times out, the lab remains deployed. Inspect `C:\ArcBox\Logs` on the client and resume just the readiness wait without reprovisioning:

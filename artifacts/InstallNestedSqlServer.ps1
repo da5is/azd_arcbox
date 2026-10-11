@@ -55,7 +55,10 @@ function Invoke-SqlSetupProcess {
 
     $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru
     if (-not $process.WaitForExit(3600000)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        & taskkill.exe /PID $process.Id /T /F | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not stop timed-out SQL Server $SqlVersion installer tree (PID $($process.Id))."
+        }
         throw "SQL Server $SqlVersion process '$FilePath' exceeded the 60-minute limit."
     }
     $process.Refresh()
@@ -63,7 +66,8 @@ function Invoke-SqlSetupProcess {
         throw "SQL Server $SqlVersion process '$FilePath' failed with exit code $($process.ExitCode)."
     }
     if ($process.ExitCode -eq 3010) {
-        Write-Warning "SQL Server $SqlVersion setup requests a guest restart."
+        $null = New-Item -Path (Join-Path $installDirectory 'RestartRequired') -ItemType File -Force
+        Write-Warning "SQL Server $SqlVersion setup requires a guest restart before database provisioning."
     }
 }
 
@@ -144,6 +148,11 @@ if ($null -eq $sqlService) {
     Write-Output "SQL Server service already exists; verifying SQL Server $SqlVersion."
 }
 
+if (Test-Path (Join-Path $installDirectory 'RestartRequired')) {
+    Write-Output "Returning to the Hyper-V host for SQL Server $SqlVersion guest restart."
+    return
+}
+
 $deadline = (Get-Date).AddMinutes(10)
 do {
     $sqlService = Get-Service -Name MSSQLSERVER -ErrorAction SilentlyContinue
@@ -157,8 +166,24 @@ if ($null -eq $sqlService -or $sqlService.Status -ne 'Running') {
     throw "The SQL Server $SqlVersion Database Engine service didn't start."
 }
 
-Install-PackageProvider -Name NuGet -Force | Out-Null
-Install-Module -Name SqlServer -AllowClobber -Force -Scope AllUsers
+$moduleJob = Start-Job -ScriptBlock {
+    $ErrorActionPreference = 'Stop'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Install-PackageProvider -Name NuGet -Force | Out-Null
+    Install-Module -Name SqlServer -AllowClobber -Force -Scope AllUsers
+}
+try {
+    if (-not (Wait-Job -Job $moduleJob -Timeout 900)) {
+        throw 'SQL PowerShell module installation exceeded the 15-minute limit.'
+    }
+    Receive-Job -Job $moduleJob -ErrorAction Stop
+    if ($moduleJob.State -ne 'Completed') {
+        throw "SQL PowerShell module installation ended in state '$($moduleJob.State)'."
+    }
+} finally {
+    if ($moduleJob.State -eq 'Running') { Stop-Job -Job $moduleJob }
+    Remove-Job -Job $moduleJob -Force
+}
 Import-Module SqlServer -Force
 $PSDefaultParameterValues['Invoke-Sqlcmd:AbortOnError'] = $true
 
