@@ -45,6 +45,44 @@ function Save-ArcBoxGuestDisk {
     }
 }
 
+function Set-ArcBoxGuestLifecycle {
+    param([Parameter(Mandatory)][string]$VMName)
+
+    $vm = Get-VM -Name $VMName -ErrorAction Stop
+    if ($vm.AutomaticStopAction -eq 'ShutDown' -and $vm.AutomaticStartAction -eq 'Start') {
+        return
+    }
+    if ($vm.State -notin @('Running', 'Off')) {
+        throw "Cannot configure lifecycle policies for $VMName in state '$($vm.State)'."
+    }
+    $restart = $vm.State -eq 'Running' -and $vm.AutomaticStopAction -ne 'ShutDown'
+    try {
+        if ($restart) {
+            Write-Host "Gracefully shutting down $VMName to configure its automatic stop policy."
+            $job = Stop-VM -Name $VMName -AsJob -ErrorAction Stop
+            try {
+                if (-not (Wait-Job -Job $job -Timeout 180)) {
+                    throw "Timed out waiting for $VMName to shut down; refusing to force power off."
+                }
+                Receive-Job -Job $job -ErrorAction Stop | Out-Null
+            } finally {
+                if ($job.State -in @('Running', 'NotStarted')) {
+                    Stop-Job -Job $job -ErrorAction Stop
+                }
+                Remove-Job -Job $job -ErrorAction Stop
+            }
+            if ((Get-VM -Name $VMName -ErrorAction Stop).State -ne 'Off') {
+                throw "$VMName did not shut down; refusing to modify its stop policy."
+            }
+        }
+        Set-VM -Name $VMName -AutomaticStopAction ShutDown -AutomaticStartAction Start -ErrorAction Stop
+    } finally {
+        if ($restart -and (Get-VM -Name $VMName -ErrorAction Stop).State -eq 'Off') {
+            Start-VM -Name $VMName -ErrorAction Stop | Out-Null
+        }
+    }
+}
+
 function Install-ArcBoxSqlExtension {
     param(
         [Parameter(Mandatory)][string]$MachineName,
@@ -533,7 +571,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         foreach ($vmName in @($SQLvmName, $Win2k19vmName, $Win2k22vmName, $Win2k25vmName, $Ubuntu01vmName, $Ubuntu02vmName)) {
-            Set-VM -Name $vmName -AutomaticStopAction ShutDown -AutomaticStartAction Start -ErrorAction Stop
+            Set-ArcBoxGuestLifecycle -VMName $vmName
         }
 
         Write-Header 'Creating VM Credentials'

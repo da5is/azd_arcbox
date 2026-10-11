@@ -485,7 +485,7 @@ Describe 'ArcBox guest provisioning safeguards' {
         $source | Should -Match 'az tag update [^\r\n]+--operation Merge --tags ArcSQLServerExtensionDeployment=Disabled'
         $source | Should -Not -Match 'az tag create'
     }
-    It 'sets guest lifecycle policies without interrupting running guests' {
+    It 'configures lifecycle policies only for the six named guests' {
         $loop = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
@@ -499,16 +499,85 @@ Describe 'ArcBox guest provisioning safeguards' {
         $Ubuntu01vmName = 'test-Ubuntu-01'
         $Ubuntu02vmName = 'test-Ubuntu-02'
         $script:configuredGuests = @()
-        function Set-VM {
-            param($Name, $AutomaticStopAction, $AutomaticStartAction, $ErrorAction)
-            $AutomaticStopAction | Should -Be ShutDown
-            $AutomaticStartAction | Should -Be Start
-            $script:configuredGuests += $Name
+        function Set-ArcBoxGuestLifecycle {
+            param($VMName)
+            $script:configuredGuests += $VMName
         }
         & ([scriptblock]::Create($loop.Extent.Text))
         $script:configuredGuests.Count | Should -Be 6
         $script:configuredGuests | Should -Contain 'test-SQL'
-        $source | Should -Not -Match 'Stop-VM'
+        $source | Should -Not -Match 'Stop-VM[^\r\n]+-TurnOff'
+    }
+}
+
+Describe 'ArcBox guest lifecycle retries' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1'), [ref]$null, [ref]$null)
+        $function = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-ArcBoxGuestLifecycle'
+        }, $true)
+        . ([scriptblock]::Create($function.Extent.Text))
+        function Get-VM { param($Name) }
+        function Set-VM { param($Name, $AutomaticStopAction, $AutomaticStartAction) }
+        function Stop-VM { param($Name, [switch]$AsJob) }
+        function Start-VM { param($Name) }
+        function Wait-Job { param($Job, $Timeout) }
+        function Receive-Job { param($Job) }
+        function Stop-Job { param($Job) }
+        function Remove-Job { param($Job) }
+    }
+    BeforeEach {
+        $script:vm = [pscustomobject]@{ State = 'Running'; AutomaticStopAction = 'Save'; AutomaticStartAction = 'StartIfRunning' }
+        Mock Get-VM { $script:vm }
+        Mock Set-VM {}
+        Mock Stop-VM { $script:vm.State = 'Off'; [pscustomobject]@{ State = 'Completed' } }
+        Mock Start-VM { $script:vm.State = 'Running' }
+        Mock Wait-Job { $Job }
+        Mock Receive-Job {}
+        Mock Remove-Job {}
+        Mock Stop-Job {}
+    }
+    It 'leaves already configured running guests untouched' {
+        $script:vm.AutomaticStopAction = 'ShutDown'
+        $script:vm.AutomaticStartAction = 'Start'
+        Set-ArcBoxGuestLifecycle -VMName test-vm
+        Should -Invoke Stop-VM -Times 0 -Exactly
+        Should -Invoke Set-VM -Times 0 -Exactly
+    }
+    It 'shuts down before changing the stop policy and restores the running state' {
+        Mock Set-VM { $script:vm.State | Should -Be Off }
+        Set-ArcBoxGuestLifecycle -VMName test-vm
+        Should -Invoke Stop-VM -Times 1 -Exactly -ParameterFilter { $AsJob }
+        Should -Invoke Start-VM -Times 1 -Exactly
+        $script:vm.State | Should -Be Running
+    }
+    It 'restores a running guest even when the settings update fails' {
+        Mock Set-VM { throw 'settings failure' }
+        { Set-ArcBoxGuestLifecycle -VMName test-vm } | Should -Throw '*settings failure*'
+        Should -Invoke Start-VM -Times 1 -Exactly
+    }
+    It 'does not restart a guest when only its start policy needs changing' {
+        $script:vm.AutomaticStopAction = 'ShutDown'
+        Set-ArcBoxGuestLifecycle -VMName test-vm
+        Should -Invoke Stop-VM -Times 0 -Exactly
+        Should -Invoke Set-VM -Times 1 -Exactly
+    }
+    It 'leaves an initially stopped guest stopped' {
+        $script:vm.State = 'Off'
+        Set-ArcBoxGuestLifecycle -VMName test-vm
+        Should -Invoke Stop-VM -Times 0 -Exactly
+        Should -Invoke Start-VM -Times 0 -Exactly
+        Should -Invoke Set-VM -Times 1 -Exactly
+    }
+    It 'fails explicitly on shutdown timeout without forcing power off' {
+        Mock Stop-VM { [pscustomobject]@{ State = 'Running' } }
+        Mock Wait-Job {}
+        { Set-ArcBoxGuestLifecycle -VMName test-vm } | Should -Throw '*Timed out*'
+        Should -Invoke Set-VM -Times 0 -Exactly
+        Should -Invoke Stop-Job -Times 1 -Exactly
     }
 }
 
