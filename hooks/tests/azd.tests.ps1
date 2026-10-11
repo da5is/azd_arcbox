@@ -463,6 +463,55 @@ Describe 'ArcBox ITPro nested memory allocation' {
     }
 }
 
+Describe 'ArcBox guest provisioning safeguards' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $source = Get-Content (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1') -Raw
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
+    }
+    It 'checks every AzCopy and WinGet configuration exit code before proceeding' {
+        $commands = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -in @('azcopy', 'winget')
+        }, $true))
+        $commands.Count | Should -Be 4
+        foreach ($command in $commands) {
+            $following = $source.Substring($command.Extent.EndOffset)
+            $following | Should -Match '^\s+if \(\$LASTEXITCODE -ne 0\) \{\s+throw '
+        }
+    }
+    It 'merges the opt-out tag without replacing existing tags' {
+        $source | Should -Match 'az tag update [^\r\n]+--operation Merge --tags ArcSQLServerExtensionDeployment=Disabled'
+        $source | Should -Not -Match 'az tag create'
+    }
+    It 'sets guest lifecycle policies without interrupting running guests' {
+        $loop = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+                $node.Variable.VariablePath.UserPath -eq 'vmName'
+        }, $true)
+        $loop | Should -Not -BeNullOrEmpty
+        $SQLvmName = 'test-SQL'
+        $Win2k19vmName = 'test-Win2K19'
+        $Win2k22vmName = 'test-Win2K22'
+        $Win2k25vmName = 'test-Win2K25'
+        $Ubuntu01vmName = 'test-Ubuntu-01'
+        $Ubuntu02vmName = 'test-Ubuntu-02'
+        $script:configuredGuests = @()
+        function Set-VM {
+            param($Name, $AutomaticStopAction, $AutomaticStartAction, $ErrorAction)
+            $AutomaticStopAction | Should -Be ShutDown
+            $AutomaticStartAction | Should -Be Start
+            $script:configuredGuests += $Name
+        }
+        & ([scriptblock]::Create($loop.Extent.Text))
+        $script:configuredGuests.Count | Should -Be 6
+        $script:configuredGuests | Should -Contain 'test-SQL'
+        $source | Should -Not -Match 'Stop-VM'
+    }
+}
+
 Describe 'ArcBox SQL extension installation' {
     BeforeAll {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent

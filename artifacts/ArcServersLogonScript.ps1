@@ -214,7 +214,10 @@ if ($Env:flavor -ne 'DevOps') {
     $workspaceResourceID = (az monitor log-analytics workspace show --resource-group $resourceGroup --workspace-name $Env:workspaceName --query 'id' -o tsv)
 
     # Before deploying ArcBox SQL set resource group tag ArcSQLServerExtensionDeployment=Disabled to opt out of automatic SQL onboarding
-    az tag create --resource-id "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" --tags ArcSQLServerExtensionDeployment=Disabled
+    az tag update --resource-id "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" --operation Merge --tags ArcSQLServerExtensionDeployment=Disabled
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to merge the SQL auto-onboarding opt-out tag (Azure CLI exit code $LASTEXITCODE)."
+    }
 
     $vhdImageToDownload = 'ArcBox-SQL-DEV.vhdx'
     if ($Env:sqlServerEdition -eq 'Standard') {
@@ -245,6 +248,9 @@ if ($Env:flavor -ne 'DevOps') {
     if (!(Test-Path $SQLvmvhdPath)) {
         Write-Output 'Downloading nested VMs VHDX file for SQL. This can take some time, hold tight...'
         azcopy cp $vhdSourceFolder $Env:ArcBoxVMDir --include-pattern "$vhdImageToDownload" --recursive=true --check-length=false --log-level=ERROR
+        if ($LASTEXITCODE -ne 0) {
+            throw "SQL guest VHD download failed (AzCopy exit code $LASTEXITCODE)."
+        }
 
         # Rename VHD file
         Rename-Item -Path "$Env:ArcBoxVMDir\$vhdImageToDownload" -NewName $SQLvmvhdPath -Force
@@ -257,6 +263,9 @@ if ($Env:flavor -ne 'DevOps') {
     $sqlDscConfigurationFile = "$Env:ArcBoxDscDir\virtual_machines_sql.dsc.yml"
     (Get-Content -Path $sqlDscConfigurationFile) -replace 'namingPrefixStage', $namingPrefix | Set-Content -Path $sqlDscConfigurationFile
     winget configure --file C:\ArcBox\DSC\virtual_machines_sql.dsc.yml --accept-configuration-agreements --disable-interactivity
+    if ($LASTEXITCODE -ne 0) {
+        throw "SQL guest configuration failed (WinGet exit code $LASTEXITCODE)."
+    }
 
     # Restarting Windows VM Network Adapters
     Write-Host 'Restarting Network Adapters'
@@ -491,6 +500,9 @@ if ($Env:flavor -ne 'DevOps') {
             $Env:AZCOPY_BUFFER_GB = 4
             Write-Output 'Downloading nested VMs VHDX files. This can take some time, hold tight...'
             azcopy cp $vhdSourceFolder $Env:ArcBoxVMDir --include-pattern $files --recursive=true --check-length=false --log-level=ERROR
+            if ($LASTEXITCODE -ne 0) {
+                throw "ITPro guest VHD downloads failed (AzCopy exit code $LASTEXITCODE)."
+            }
         }
 
         if ($namingPrefix -ne 'ArcBox') {
@@ -523,15 +535,13 @@ if ($Env:flavor -ne 'DevOps') {
         $serversDscConfigurationFile = "$Env:ArcBoxDscDir\virtual_machines_itpro.dsc.yml"
         (Get-Content -Path $serversDscConfigurationFile) -replace 'namingPrefixStage', $namingPrefix | Set-Content -Path $serversDscConfigurationFile
         winget configure --file C:\ArcBox\DSC\virtual_machines_itpro.dsc.yml --accept-configuration-agreements --disable-interactivity
-
-    # Configure automatic start & stop action for the nested VMs
-    Get-VM | Where-Object {$_.State -eq "Running"} |
-        ForEach-Object -Parallel {
-            Stop-VM -Force -Name $PSItem.Name
-            Set-VM -Name $PSItem.Name -AutomaticStopAction ShutDown -AutomaticStartAction Start
-            Start-VM -Name $PSItem.Name
+        if ($LASTEXITCODE -ne 0) {
+            throw "ITPro guest configuration failed (WinGet exit code $LASTEXITCODE)."
         }
-    Start-Sleep -Seconds 30
+
+        foreach ($vmName in @($SQLvmName, $Win2k19vmName, $Win2k22vmName, $Win2k25vmName, $Ubuntu01vmName, $Ubuntu02vmName)) {
+            Set-VM -Name $vmName -AutomaticStopAction ShutDown -AutomaticStartAction Start -ErrorAction Stop
+        }
 
         Write-Header 'Creating VM Credentials'
         # Hard-coded username and password for the nested VMs
