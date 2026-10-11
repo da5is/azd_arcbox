@@ -453,6 +453,16 @@ Describe 'ArcBox standalone artifact source' {
     }
 }
 
+Describe 'ArcBox ITPro nested memory allocation' {
+    It 'allocates 2 GB to each Ubuntu guest to leave client memory headroom' {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $configuration = Get-Content (Join-Path $arcboxRoot 'artifacts\dsc\virtual_machines_itpro.dsc.yml') -Raw
+        foreach ($guest in @('Ubuntu-01', 'Ubuntu-02')) {
+            $configuration | Should -Match "(?s)VhdPath: [^\r\n]*namingPrefixStage-$guest\.vhdx\s+ProcessorCount: 2\s+StartupMemory: '2GB'"
+        }
+    }
+}
+
 Describe 'ArcBox private Key Vault deployment' {
     BeforeAll {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
