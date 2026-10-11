@@ -649,7 +649,7 @@ if ($Env:flavor -ne 'DevOps') {
         Add-Content -Path "$Env:USERPROFILE\.ssh\config" -Value 'StrictHostKeyChecking=accept-new'
 
         Get-VM *Ubuntu* | Wait-VM -For Heartbeat -Timeout 600 -ErrorAction Stop
-        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$Env:TEMP\authorized_keys" -DestinationPath "/home/$nestedLinuxUsername/.ssh/authorized_keys" -FileSource Host -Force -CreateFullPath -ErrorAction Stop
+        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$Env:TEMP\authorized_keys" -DestinationPath "/home/$nestedLinuxUsername/.ssh" -FileSource Host -Force -CreateFullPath -ErrorAction Stop
 
         if ($namingPrefix -ne 'ArcBox') {
 
@@ -739,7 +739,7 @@ if ($Env:flavor -ne 'DevOps') {
         # Copy installation script to nested Linux VMs
         Write-Output 'Transferring installation script to nested Linux VMs...'
 
-        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh" -FileSource Host -Force -ErrorAction Stop
+        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername" -FileSource Host -Force -ErrorAction Stop
 
         Write-Output 'Activating operating system on Windows VMs...'
 

@@ -485,6 +485,17 @@ Describe 'ArcBox guest provisioning safeguards' {
         $source | Should -Match 'az tag update [^\r\n]+--operation Merge --tags ArcSQLServerExtensionDeployment=Disabled'
         $source | Should -Not -Match 'az tag create'
     }
+    It 'uses destination directories for Linux Hyper-V file copies' {
+        $copies = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Copy-VMFile' -and
+                $node.Extent.Text -match '/home/'
+        }, $true))
+        $copies.Count | Should -Be 2
+        $copies[0].Extent.Text | Should -Match '-DestinationPath "/home/\$nestedLinuxUsername/\.ssh" '
+        $copies[1].Extent.Text | Should -Match '-DestinationPath "/home/\$nestedLinuxUsername" '
+    }
     It 'configures lifecycle policies only for the six named guests' {
         $loop = $ast.Find({
             param($node)
