@@ -485,6 +485,13 @@ Describe 'ArcBox guest provisioning safeguards' {
         $source | Should -Match 'az tag update [^\r\n]+--operation Merge --tags ArcSQLServerExtensionDeployment=Disabled'
         $source | Should -Not -Match 'az tag create'
     }
+    It 'installs the policy scan dependency and retains setup recovery until validation runs' {
+        $bootstrap = Get-Content (Join-Path $arcboxRoot 'artifacts\Bootstrap.ps1') -Raw
+        $bootstrap | Should -Match '\$modules = @\([^\r\n]+"Az.PolicyInsights"'
+        $source | Should -Match 'Start-AzPolicyComplianceScan [^\r\n]+-ErrorAction Stop'
+        $source.IndexOf("Unregister-ScheduledTask -TaskName 'ArcServersLogonScript'") |
+            Should -BeGreaterThan $source.IndexOf('& "$Env:ArcBoxTestsDir\Invoke-Test.ps1"')
+    }
     It 'uses destination directories for Linux Hyper-V file copies' {
         $copies = @($ast.FindAll({
             param($node)

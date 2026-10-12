@@ -852,16 +852,11 @@ if ($Env:flavor -ne 'DevOps') {
 
     }
 
-    # Removing the LogonScript Scheduled Task so it won't run on next reboot
-    Write-Header 'Removing Logon Task'
-    if ($null -ne (Get-ScheduledTask -TaskName 'ArcServersLogonScript' -ErrorAction SilentlyContinue)) {
-        Unregister-ScheduledTask -TaskName 'ArcServersLogonScript' -Confirm:$false
-    }
 }
 
 # Triggering Azure Policy compliance scan
 Write-Header 'Triggering Azure Policy compliance scan'
-Start-AzPolicyComplianceScan -ResourceGroupName $resourceGroup -AsJob
+Start-AzPolicyComplianceScan -ResourceGroupName $resourceGroup -AsJob -ErrorAction Stop
 
 #Changing to Jumpstart ArcBox wallpaper
 Write-Header 'Changing wallpaper'
@@ -877,6 +872,11 @@ if ($Env:flavor -eq 'ITPro') {
 
     & "$Env:ArcBoxTestsDir\Invoke-Test.ps1"
 
+}
+
+Write-Header 'Removing Logon Task'
+if ($null -ne (Get-ScheduledTask -TaskName 'ArcServersLogonScript' -ErrorAction SilentlyContinue)) {
+    Unregister-ScheduledTask -TaskName 'ArcServersLogonScript' -Confirm:$false
 }
 } catch {
     $setupError = $_

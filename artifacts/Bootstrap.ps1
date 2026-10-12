@@ -225,7 +225,7 @@ Remove-Item .\PowerShell7.msi
 Copy-Item $PsHome\Profile.ps1 -Destination "C:\Program Files\PowerShell\7\"
 
 
-$modules = @("Az.ConnectedMachine", "Az.ConnectedKubernetes", "Az.CustomLocation", "Azure.Arc.Jumpstart.Common", "Pester")
+$modules = @("Az.ConnectedMachine", "Az.ConnectedKubernetes", "Az.CustomLocation", "Az.PolicyInsights", "Azure.Arc.Jumpstart.Common", "Pester")
 
 foreach ($module in $modules) {
     Install-PSResource -Name $module -Scope AllUsers -Quiet -AcceptLicense -TrustRepository
