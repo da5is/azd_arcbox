@@ -485,10 +485,10 @@ Describe 'ArcBox guest provisioning safeguards' {
         $source | Should -Match 'az tag update [^\r\n]+--operation Merge --tags ArcSQLServerExtensionDeployment=Disabled'
         $source | Should -Not -Match 'az tag create'
     }
-    It 'installs the policy scan dependency and retains setup recovery until validation runs' {
-        $bootstrap = Get-Content (Join-Path $arcboxRoot 'artifacts\Bootstrap.ps1') -Raw
-        $bootstrap | Should -Match '\$modules = @\([^\r\n]+"Az.PolicyInsights"'
-        $source | Should -Match 'Start-AzPolicyComplianceScan [^\r\n]+-ErrorAction Stop'
+    It 'submits the policy scan within the resource group and retains setup recovery until validation runs' {
+        $source | Should -Match 'Invoke-AzRestMethod -Method POST -Path "/subscriptions/\$subscriptionId/resourceGroups/\$resourceGroup/providers/Microsoft.PolicyInsights/policyStates/latest/triggerEvaluation\?api-version=2019-10-01" -ErrorAction Stop'
+        $source | Should -Match '\$policyScan.StatusCode -notin @\(200, 202, 204\)'
+        $source | Should -Not -Match 'Start-AzPolicyComplianceScan'
         $source.IndexOf("Unregister-ScheduledTask -TaskName 'ArcServersLogonScript'") |
             Should -BeGreaterThan $source.IndexOf('& "$Env:ArcBoxTestsDir\Invoke-Test.ps1"')
     }

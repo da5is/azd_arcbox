@@ -856,7 +856,11 @@ if ($Env:flavor -ne 'DevOps') {
 
 # Triggering Azure Policy compliance scan
 Write-Header 'Triggering Azure Policy compliance scan'
-Start-AzPolicyComplianceScan -ResourceGroupName $resourceGroup -AsJob -ErrorAction Stop
+$policyScan = Invoke-AzRestMethod -Method POST -Path "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.PolicyInsights/policyStates/latest/triggerEvaluation?api-version=2019-10-01" -ErrorAction Stop
+if ($policyScan.StatusCode -notin @(200, 202, 204)) {
+    throw "Azure Policy scan submission failed (HTTP $($policyScan.StatusCode))."
+}
+Write-Host 'Azure Policy compliance scan submitted.'
 
 #Changing to Jumpstart ArcBox wallpaper
 Write-Header 'Changing wallpaper'
