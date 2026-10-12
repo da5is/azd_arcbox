@@ -3,11 +3,11 @@ properties:
 
   resources:
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-Win2K19
+      id: win19sql16
       directives:
-        description: Configure VM namingPrefixStage-Win2K19
+        description: Configure VM win19sql16
       settings:
-        Name: namingPrefixStage-Win2K19
+        Name: win19sql16
         SwitchName: 'InternalNATSwitch'
         VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K19.vhdx
         ProcessorCount: 2
@@ -19,11 +19,11 @@ properties:
         EnableGuestService: true
         SecureBoot: true
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-Win2K22
+      id: win22sql19
       directives:
-        description: Configure VM namingPrefixStage-Win2K22
+        description: Configure VM win22sql19
       settings:
-        Name: namingPrefixStage-Win2K22
+        Name: win22sql19
         SwitchName: 'InternalNATSwitch'
         VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K22.vhdx
         ProcessorCount: 2
@@ -35,11 +35,11 @@ properties:
         EnableGuestService: true
         SecureBoot: true
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-Win2K25
+      id: win25sql25
       directives:
-        description: Configure VM namingPrefixStage-Win2K25
+        description: Configure VM win25sql25
       settings:
-        Name: namingPrefixStage-Win2K25
+        Name: win25sql25
         SwitchName: 'InternalNATSwitch'
         VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K25.vhdx
         ProcessorCount: 2

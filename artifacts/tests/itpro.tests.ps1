@@ -1,11 +1,11 @@
 
 BeforeDiscovery {
     $namingPrefix = $env:namingPrefix
-    $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", "$namingPrefix-Win2K19", "$namingPrefix-Win2K22", "$namingPrefix-Win2K25")
+    $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", 'win19sql16', 'win22sql19', 'win25sql25')
     $SqlVMs = @(
-        @{ Name = "$namingPrefix-Win2K19"; MajorVersion = 13; DatabaseName = 'AdventureWorksLT2016' }
-        @{ Name = "$namingPrefix-Win2K22"; MajorVersion = 15; DatabaseName = 'AdventureWorksLT2019' }
-        @{ Name = "$namingPrefix-Win2K25"; MajorVersion = 17; DatabaseName = 'AdventureWorksLT2025' }
+        @{ Name = 'win19sql16'; MajorVersion = 13; DatabaseName = 'AdventureWorksLT2016' }
+        @{ Name = 'win22sql19'; MajorVersion = 15; DatabaseName = 'AdventureWorksLT2019' }
+        @{ Name = 'win25sql25'; MajorVersion = 17; DatabaseName = 'AdventureWorksLT2025' }
     )
     $null = Connect-AzAccount -Identity -Tenant $env:tenantId -Subscription $env:subscriptionId
 }

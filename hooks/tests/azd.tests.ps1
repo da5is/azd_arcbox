@@ -511,9 +511,9 @@ Describe 'ArcBox guest provisioning safeguards' {
         }, $true)
         $loop | Should -Not -BeNullOrEmpty
         $SQLvmName = 'test-SQL'
-        $Win2k19vmName = 'test-Win2K19'
-        $Win2k22vmName = 'test-Win2K22'
-        $Win2k25vmName = 'test-Win2K25'
+        $Win19Sql16vmName = 'win19sql16'
+        $Win22Sql19vmName = 'win22sql19'
+        $Win25Sql25vmName = 'win25sql25'
         $Ubuntu01vmName = 'test-Ubuntu-01'
         $Ubuntu02vmName = 'test-Ubuntu-02'
         $script:configuredGuests = @()
@@ -524,6 +524,9 @@ Describe 'ArcBox guest provisioning safeguards' {
         & ([scriptblock]::Create($loop.Extent.Text))
         $script:configuredGuests.Count | Should -Be 6
         $script:configuredGuests | Should -Contain 'test-SQL'
+        $script:configuredGuests | Should -Contain 'win19sql16'
+        $script:configuredGuests | Should -Contain 'win22sql19'
+        $script:configuredGuests | Should -Contain 'win25sql25'
         $source | Should -Not -Match 'Stop-VM[^\r\n]+-TurnOff'
     }
 }
