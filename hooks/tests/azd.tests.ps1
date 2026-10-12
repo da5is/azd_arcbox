@@ -742,6 +742,30 @@ Describe 'ArcBox SQL extension installation' {
     }
 }
 
+Describe 'ArcBox SQL sample database batches' {
+    It 'creates ArchiveDB in a separate batch before compiling its table' {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\InstallNestedSqlServer.ps1'), [ref]$null, [ref]$null)
+        $assignment = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left.Extent.Text -eq '$archiveDatabaseQuery'
+        }, $true)
+        $archiveDataPath = 'C:\SQL\ArchiveDB.mdf'
+        $archiveLogPath = 'C:\SQL\ArchiveDB_log.ldf'
+        $archiveFileStreamPath = 'C:\SQL\ArchiveDB_FileStream'
+        . ([scriptblock]::Create($assignment.Extent.Text))
+        $batches = @($archiveDatabaseQuery -split '(?m)^GO\r?$')
+        $batches.Count | Should -Be 3
+        $batches[0] | Should -Match 'CREATE DATABASE \[ArchiveDB\]'
+        $batches[0] | Should -Not -Match 'CREATE TABLE|ALTER DATABASE'
+        $batches[1] | Should -Match "IF OBJECT_ID\(N'ArchiveDB.dbo.Records', N'U'\) IS NULL"
+        $batches[1] | Should -Match 'CREATE TABLE \[ArchiveDB\]\.\[dbo\]\.\[Records\]'
+        $batches[2] | Should -Match 'ALTER DATABASE \[ArchiveDB\] SET RECOVERY FULL'
+    }
+}
+
 Describe 'ArcBox SQL artifact downloads' {
     BeforeAll {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent

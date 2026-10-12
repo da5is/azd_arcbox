@@ -274,6 +274,7 @@ BEGIN
         (NAME = N'Arch3', FILENAME = N'$archiveFileStreamPath')
     LOG ON (NAME = N'Archlog1', FILENAME = N'$archiveLogPath');
 END;
+GO
 IF OBJECT_ID(N'ArchiveDB.dbo.Records', N'U') IS NULL
 BEGIN
     CREATE TABLE [ArchiveDB].[dbo].[Records]
@@ -283,6 +284,7 @@ BEGIN
         [Chart] varbinary(max) FILESTREAM NULL
     );
 END;
+GO
 ALTER DATABASE [ArchiveDB] SET RECOVERY FULL;
 "@
 Invoke-Sqlcmd -ServerInstance '.' -Query $archiveDatabaseQuery -TrustServerCertificate
