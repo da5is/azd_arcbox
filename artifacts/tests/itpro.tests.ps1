@@ -1,7 +1,7 @@
 
 BeforeDiscovery {
     $namingPrefix = $env:namingPrefix
-    $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", 'win19sql16', 'win22sql19', 'win25sql25')
+    $VMs = @('win22sql22', "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", 'win19sql16', 'win22sql19', 'win25sql25')
     $SqlVMs = @(
         @{ Name = 'win19sql16'; MajorVersion = 13; DatabaseName = 'AdventureWorksLT2016' }
         @{ Name = 'win22sql19'; MajorVersion = 15; DatabaseName = 'AdventureWorksLT2019' }

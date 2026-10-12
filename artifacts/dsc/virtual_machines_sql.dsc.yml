@@ -2,11 +2,11 @@
 properties:
   resources:
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-SQL
+      id: win22sql22
       directives:
-        description: Configure VM namingPrefixStage-SQL
+        description: Configure VM win22sql22
       settings:
-        Name: namingPrefixStage-SQL
+        Name: win22sql22
         SwitchName: 'InternalNATSwitch'
         VhdPath: F:\Virtual Machines\namingPrefixStage-SQL.vhdx
         ProcessorCount: 2

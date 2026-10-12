@@ -485,6 +485,11 @@ Describe 'ArcBox guest provisioning safeguards' {
         $source | Should -Match 'az tag update [^\r\n]+--operation Merge --tags ArcSQLServerExtensionDeployment=Disabled'
         $source | Should -Not -Match 'az tag create'
     }
+    It 'names the prebuilt SQL Server guest for its OS and SQL Server versions' {
+        $source | Should -Match "\$SQLvmName = 'win22sql22'"
+        $configuration = Get-Content (Join-Path $arcboxRoot 'artifacts\dsc\virtual_machines_sql.dsc.yml') -Raw
+        $configuration | Should -Match '(?s)id: win22sql22.*?Name: win22sql22'
+    }
     It 'submits the policy scan within the resource group and retains setup recovery until validation runs' {
         $source | Should -Match 'Invoke-AzRestMethod -Method POST -Path "/subscriptions/\$subscriptionId/resourceGroups/\$resourceGroup/providers/Microsoft.PolicyInsights/policyStates/latest/triggerEvaluation\?api-version=2019-10-01" -ErrorAction Stop'
         $source | Should -Match '\$policyScan.StatusCode -notin @\(200, 202, 204\)'
@@ -510,7 +515,7 @@ Describe 'ArcBox guest provisioning safeguards' {
                 $node.Variable.VariablePath.UserPath -eq 'vmName'
         }, $true)
         $loop | Should -Not -BeNullOrEmpty
-        $SQLvmName = 'test-SQL'
+        $SQLvmName = 'win22sql22'
         $Win19Sql16vmName = 'win19sql16'
         $Win22Sql19vmName = 'win22sql19'
         $Win25Sql25vmName = 'win25sql25'
@@ -523,7 +528,7 @@ Describe 'ArcBox guest provisioning safeguards' {
         }
         & ([scriptblock]::Create($loop.Extent.Text))
         $script:configuredGuests.Count | Should -Be 6
-        $script:configuredGuests | Should -Contain 'test-SQL'
+        $script:configuredGuests | Should -Contain 'win22sql22'
         $script:configuredGuests | Should -Contain 'win19sql16'
         $script:configuredGuests | Should -Contain 'win22sql19'
         $script:configuredGuests | Should -Contain 'win25sql25'

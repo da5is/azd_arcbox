@@ -308,7 +308,7 @@ if ($Env:flavor -ne 'DevOps') {
     $null = Set-AzResource -ResourceName $env:computername -ResourceGroupName $env:resourceGroup -ResourceType 'microsoft.compute/virtualmachines' -Tag $tags -Force
 
     Write-Host 'Fetching SQL VM'
-    $SQLvmName = "$namingPrefix-SQL"
+    $SQLvmName = 'win22sql22'
     $SQLvmvhdPath = "$Env:ArcBoxVMDir\$namingPrefix-SQL.vhdx"
 
     # Verify if VHD files already downloaded especially when re-running this script
@@ -331,7 +331,7 @@ if ($Env:flavor -ne 'DevOps') {
     Invoke-Command -VMName $SQLvmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
     Start-Sleep -Seconds 20
 
-    # Rename server if hostname is not as ArcBox-SQL or doesn't match naming prefix
+    # Rename the prebuilt SQL guest to its OS and SQL Server version name.
     $hostname = Invoke-Command -VMName $SQLvmName -ScriptBlock { hostname } -Credential $winCreds
 
     if ($hostname -ne $SQLvmName) {
@@ -774,7 +774,7 @@ if ($Env:flavor -ne 'DevOps') {
         Invoke-JSSudoCommand -Session $UbuntuSessions -Command "sh /home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'
-        $VMs = @("$namingPrefix-SQL", $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)
+        $VMs = @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)
         $VMs | ForEach-Object -Parallel {
 
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
@@ -789,7 +789,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Header 'Enabling SSH access and triggering update assessment for Arc-enabled servers'
-        $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)
+        $VMs = @($SQLvmName, $Ubuntu01vmName, $Ubuntu02vmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)
         $VMs | ForEach-Object -Parallel {
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
 
