@@ -12,7 +12,7 @@ param windowsAdminUsername string
 @minLength(12)
 @maxLength(123)
 @secure()
-param windowsAdminPassword string  = newGuid()
+param windowsAdminPassword string
 
 @description('Enable automatic logon into ArcBox Virtual Machine')
 param vmAutologon bool = true
@@ -103,7 +103,7 @@ param enableAzureSpotPricing bool = false
 param zones string = '1'
 
 @secure()
-param registryPassword string = newGuid()
+param registryPassword string
 
 var templateBaseUrl = 'https://raw.githubusercontent.com/${githubAccount}/azd_arcbox/${githubBranch}/'
 var aksArcDataClusterName = '${namingPrefix}-AKS-Data-${guid}'

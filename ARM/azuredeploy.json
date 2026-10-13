@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.33.93.31351",
-      "templateHash": "13848976231771269967"
+      "version": "0.48.1.52935",
+      "templateHash": "3065442351347351935"
     }
   },
   "parameters": {
@@ -31,7 +31,6 @@
     },
     "windowsAdminPassword": {
       "type": "securestring",
-      "defaultValue": "[newGuid()]",
       "minLength": 12,
       "maxLength": 123,
       "metadata": {
@@ -218,8 +217,7 @@
       }
     },
     "registryPassword": {
-      "type": "securestring",
-      "defaultValue": "[newGuid()]"
+      "type": "securestring"
     }
   },
   "variables": {
@@ -235,7 +233,7 @@
     {
       "condition": "[or(equals(parameters('flavor'), 'DevOps'), equals(parameters('flavor'), 'DataOps'))]",
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "ubuntuRancherK3sDataSvcDeployment",
       "properties": {
         "expressionEvaluationOptions": {
@@ -247,7 +245,7 @@
             "value": "[parameters('sshRSAPublicKey')]"
           },
           "stagingStorageAccountName": {
-            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2022-09-01').outputs.storageAccountName.value)]"
+            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2025-04-01').outputs.storageAccountName.value)]"
           },
           "logAnalyticsWorkspace": {
             "value": "[parameters('logAnalyticsWorkspaceName')]"
@@ -256,7 +254,7 @@
             "value": "[variables('templateBaseUrl')]"
           },
           "subnetId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2022-09-01').outputs.subnetId.value]"
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2025-04-01').outputs.subnetId.value]"
           },
           "azureLocation": {
             "value": "[parameters('location')]"
@@ -280,8 +278,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "7999814625664331790"
+              "version": "0.48.1.52935",
+              "templateHash": "16649358408877690491"
             }
           },
           "parameters": {
@@ -558,7 +556,7 @@
       },
       "condition": "[or(equals(parameters('flavor'), 'DataOps'), equals(parameters('flavor'), 'DevOps'))]",
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "[format('ubuntuRancherK3sDataSvcNodesDeployment-{0}', range(0, variables('k3sClusterNodesCount'))[copyIndex()])]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -570,7 +568,7 @@
             "value": "[parameters('sshRSAPublicKey')]"
           },
           "stagingStorageAccountName": {
-            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2022-09-01').outputs.storageAccountName.value)]"
+            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2025-04-01').outputs.storageAccountName.value)]"
           },
           "logAnalyticsWorkspace": {
             "value": "[parameters('logAnalyticsWorkspaceName')]"
@@ -579,7 +577,7 @@
             "value": "[variables('templateBaseUrl')]"
           },
           "subnetId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2022-09-01').outputs.subnetId.value]"
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2025-04-01').outputs.subnetId.value]"
           },
           "azureLocation": {
             "value": "[parameters('location')]"
@@ -603,8 +601,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "18256133984079296088"
+              "version": "0.48.1.52935",
+              "templateHash": "5835352158539088989"
             }
           },
           "parameters": {
@@ -840,7 +838,7 @@
     {
       "condition": "[equals(parameters('flavor'), 'DevOps')]",
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "ubuntuRancherK3sDeployment",
       "properties": {
         "expressionEvaluationOptions": {
@@ -852,7 +850,7 @@
             "value": "[parameters('sshRSAPublicKey')]"
           },
           "stagingStorageAccountName": {
-            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2022-09-01').outputs.storageAccountName.value)]"
+            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2025-04-01').outputs.storageAccountName.value)]"
           },
           "logAnalyticsWorkspace": {
             "value": "[parameters('logAnalyticsWorkspaceName')]"
@@ -861,7 +859,7 @@
             "value": "[variables('templateBaseUrl')]"
           },
           "subnetId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2022-09-01').outputs.subnetId.value]"
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2025-04-01').outputs.subnetId.value]"
           },
           "azureLocation": {
             "value": "[parameters('location')]"
@@ -885,8 +883,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "7999814625664331790"
+              "version": "0.48.1.52935",
+              "templateHash": "16649358408877690491"
             }
           },
           "parameters": {
@@ -1163,7 +1161,7 @@
       },
       "condition": "[equals(parameters('flavor'), 'DevOps')]",
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "[format('ubuntuRancherK3sNodesDeployment-{0}', range(0, variables('k3sClusterNodesCount'))[copyIndex()])]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -1175,7 +1173,7 @@
             "value": "[parameters('sshRSAPublicKey')]"
           },
           "stagingStorageAccountName": {
-            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2022-09-01').outputs.storageAccountName.value)]"
+            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2025-04-01').outputs.storageAccountName.value)]"
           },
           "logAnalyticsWorkspace": {
             "value": "[parameters('logAnalyticsWorkspaceName')]"
@@ -1184,7 +1182,7 @@
             "value": "[variables('templateBaseUrl')]"
           },
           "subnetId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2022-09-01').outputs.subnetId.value]"
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2025-04-01').outputs.subnetId.value]"
           },
           "azureLocation": {
             "value": "[parameters('location')]"
@@ -1208,8 +1206,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "18256133984079296088"
+              "version": "0.48.1.52935",
+              "templateHash": "5835352158539088989"
             }
           },
           "parameters": {
@@ -1444,7 +1442,7 @@
     },
     {
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "clientVmDeployment",
       "properties": {
         "expressionEvaluationOptions": {
@@ -1465,7 +1463,7 @@
             "value": "[parameters('logAnalyticsWorkspaceName')]"
           },
           "stagingStorageAccountName": {
-            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2022-09-01').outputs.storageAccountName.value)]"
+            "value": "[toLower(reference(resourceId('Microsoft.Resources/deployments', 'stagingStorageAccountDeployment'), '2025-04-01').outputs.storageAccountName.value)]"
           },
           "templateBaseUrl": {
             "value": "[variables('templateBaseUrl')]"
@@ -1474,7 +1472,7 @@
             "value": "[parameters('flavor')]"
           },
           "subnetId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2022-09-01').outputs.subnetId.value]"
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'mgmtArtifactsAndPolicyDeployment'), '2025-04-01').outputs.subnetId.value]"
           },
           "deployBastion": {
             "value": "[parameters('deployBastion')]"
@@ -1544,8 +1542,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "14403538285771259405"
+              "version": "0.48.1.52935",
+              "templateHash": "13437263394593981968"
             }
           },
           "parameters": {
@@ -2096,7 +2094,7 @@
     },
     {
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "stagingStorageAccountDeployment",
       "properties": {
         "expressionEvaluationOptions": {
@@ -2117,8 +2115,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "4963852895120569584"
+              "version": "0.48.1.52935",
+              "templateHash": "10874342255181301669"
             }
           },
           "parameters": {
@@ -2182,7 +2180,7 @@
     },
     {
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "mgmtArtifactsAndPolicyDeployment",
       "properties": {
         "expressionEvaluationOptions": {
@@ -2228,8 +2226,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "892674733817421065"
+              "version": "0.48.1.52935",
+              "templateHash": "17625221306866548170"
             }
           },
           "parameters": {
@@ -2995,7 +2993,7 @@
             },
             "policyDeployment": {
               "type": "Microsoft.Resources/deployments",
-              "apiVersion": "2022-09-01",
+              "apiVersion": "2025-04-01",
               "name": "policyDeployment",
               "properties": {
                 "expressionEvaluationOptions": {
@@ -3022,8 +3020,8 @@
                   "metadata": {
                     "_generator": {
                       "name": "bicep",
-                      "version": "0.33.93.31351",
-                      "templateHash": "13451119962972867590"
+                      "version": "0.48.1.52935",
+                      "templateHash": "4261655878196771221"
                     }
                   },
                   "parameters": {
@@ -3373,7 +3371,7 @@
             },
             "keyVault": {
               "type": "Microsoft.Resources/deployments",
-              "apiVersion": "2022-09-01",
+              "apiVersion": "2025-04-01",
               "name": "keyVaultDeployment",
               "properties": {
                 "expressionEvaluationOptions": {
@@ -5867,7 +5865,7 @@
     {
       "condition": "[equals(parameters('flavor'), 'DataOps')]",
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "addsVmDeployment",
       "properties": {
         "expressionEvaluationOptions": {
@@ -5903,8 +5901,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "3009030363642019969"
+              "version": "0.48.1.52935",
+              "templateHash": "4466629332629788935"
             }
           },
           "parameters": {
@@ -6149,7 +6147,7 @@
     {
       "condition": "[equals(parameters('flavor'), 'DataOps')]",
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "updateVNetDNSServers",
       "properties": {
         "expressionEvaluationOptions": {
@@ -6186,8 +6184,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "892674733817421065"
+              "version": "0.48.1.52935",
+              "templateHash": "17625221306866548170"
             }
           },
           "parameters": {
@@ -6953,7 +6951,7 @@
             },
             "policyDeployment": {
               "type": "Microsoft.Resources/deployments",
-              "apiVersion": "2022-09-01",
+              "apiVersion": "2025-04-01",
               "name": "policyDeployment",
               "properties": {
                 "expressionEvaluationOptions": {
@@ -6980,8 +6978,8 @@
                   "metadata": {
                     "_generator": {
                       "name": "bicep",
-                      "version": "0.33.93.31351",
-                      "templateHash": "13451119962972867590"
+                      "version": "0.48.1.52935",
+                      "templateHash": "4261655878196771221"
                     }
                   },
                   "parameters": {
@@ -7331,7 +7329,7 @@
             },
             "keyVault": {
               "type": "Microsoft.Resources/deployments",
-              "apiVersion": "2022-09-01",
+              "apiVersion": "2025-04-01",
               "name": "keyVaultDeployment",
               "properties": {
                 "expressionEvaluationOptions": {
@@ -9829,7 +9827,7 @@
     {
       "condition": "[equals(parameters('flavor'), 'DataOps')]",
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "aksDeployment",
       "properties": {
         "expressionEvaluationOptions": {
@@ -9859,8 +9857,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "13162246009947343502"
+              "version": "0.48.1.52935",
+              "templateHash": "4603702601002686826"
             }
           },
           "parameters": {
@@ -10127,7 +10125,7 @@
     },
     {
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
+      "apiVersion": "2025-04-01",
       "name": "[format('pid-{0}', variables('customerUsageAttributionDeploymentName'))]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -10141,8 +10139,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.33.93.31351",
-              "templateHash": "1938494866978600684"
+              "version": "0.48.1.52935",
+              "templateHash": "15369115908105907048"
             }
           },
           "resources": []

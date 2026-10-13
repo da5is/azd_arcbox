@@ -75,7 +75,7 @@ azd up
 
 The preprovision hook registers missing resource providers. For DevOps/DataOps, it generates a per-environment RSA key pair under `.azure/<environment-name>/ssh` unless `JS_SSH_PUBLIC_KEY` is supplied. Only the public key is passed to Azure.
 
-`azd` generates the Windows administrator and registry passwords once and retains them as secure infrastructure parameters for subsequent runs. The administrator password is also stored in the deployed Key Vault as `windowsAdminPassword`; it is not printed by the hooks or exported as a Bicep output. Keep the ignored `.azure` directory private and retain it when resuming an environment.
+On the first provisioning run, the preprovision hook prompts for one shared password and confirmation using hidden input. It requires 12-123 characters including lowercase, uppercase, numeric, and special characters; control characters, double quotes, and backslashes are not supported. The value is reused for the client/domain administrator, the nested Windows and Linux guest accounts, and the SQL Server `sa` login; Bicep also uses it for the `registryPassword` secret. The hook stores it in the ignored `.azure/<environment>/.env` file for retries, where it is plaintext, so keep that directory private. Azure receives secure Bicep parameters, and the password is stored in the resource group's Key Vault as `windowsAdminPassword`; it is not printed by the hooks or exported as a Bicep output. The ITPro Windows images have an image-provided bootstrap Administrator credential used only to rotate each guest to the shared password on initial setup. For DataOps, setup writes SQL MI credentials to `C:\ArcBox\SQLMIEndpoints.txt` and saves a SQL Server connection profile on the client; protect the client and these local files. For unattended runs, configure `JS_ARCBOX_PASSWORD` before provisioning.
 
 Cluster-name suffixes are deterministic per subscription and environment, so retrying does not create new clusters with randomly changing names. An existing environment cannot be switched to a different flavor while its lab exists. The hook also refuses to adopt an existing resource group without the expected ArcBox deployment.
 
@@ -143,6 +143,7 @@ Set overrides with `azd env set <name> <value>` before `azd up`.
 | `AZURE_LOCATION` | Selected during environment setup | Azure region for all resources; compatibility and quota must be checked for the chosen flavor |
 | `JS_ARCBOX_FLAVOR` | Prompt on first provisioning | `ITPro`, `DevOps`, or `DataOps`; saved per environment. Set explicitly for unattended runs. |
 | `JS_WINDOWS_ADMIN_USERNAME` | `arcdemo` | Client administrator username |
+| `JS_ARCBOX_PASSWORD` | Prompted on first provisioning | Shared password for the client/domain administrator, nested Windows/Linux guest accounts, SQL Server `sa`, and `registryPassword`; requires 12-123 characters with lowercase, uppercase, and numeric characters plus a special character (no control characters, double quotes, or backslashes). Stored in the ignored local `.azure` environment file. |
 | `JS_SSH_PUBLIC_KEY` | Generated for DevOps/DataOps | OpenSSH RSA public-key contents, not a file path |
 | `JS_CUSTOM_LOCATION_RP_ID` | Looked up for DataOps | Custom Locations RP **object ID**, not application/client ID |
 | `JS_DEPLOY_BASTION` | `false` | Use Bastion instead of a client public IP |

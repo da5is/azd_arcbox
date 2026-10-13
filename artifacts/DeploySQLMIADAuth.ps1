@@ -433,7 +433,7 @@ $sqlServerConnection = @"
         "database": "",
         "authenticationType": "SqlLogin",
         "user": "sa",
-        "password": "JS123!!",
+        "password": "$AZDATA_PASSWORD",
         "applicationName": "azdata",
         "groupId": "C777F06B-202E-4480-B475-FA416154D458",
         "databaseDisplayName": ""

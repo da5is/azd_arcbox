@@ -20,7 +20,7 @@ BeforeAll {
     $environmentNames = @(
         'AZURE_ENV_NAME', 'AZURE_SUBSCRIPTION_ID', 'AZURE_LOCATION', 'AZURE_RESOURCE_GROUP',
         'JS_ARCBOX_FLAVOR', 'JS_ARCBOX_TIMEOUT_MINUTES', 'JS_SSH_PUBLIC_KEY', 'JS_CUSTOM_LOCATION_RP_ID',
-        'AZD_NO_PROMPT'
+        'AZD_NO_PROMPT', 'JS_ARCBOX_PASSWORD'
     )
     function Initialize-TestEnvironment {
         $script:savedEnvironment = @{}
@@ -32,6 +32,7 @@ BeforeAll {
         $env:AZURE_SUBSCRIPTION_ID = '00000000-0000-0000-0000-000000000001'
         $env:AZURE_LOCATION = 'eastus2'
         $env:AZURE_RESOURCE_GROUP = 'arcbox-test-rg'
+        $env:JS_ARCBOX_PASSWORD = 'ArcBoxTestPassword1!'
         $script:originalExitCode = $global:LASTEXITCODE
     }
 
@@ -123,6 +124,89 @@ Describe 'ArcBox flavor selection' {
         $env:AZD_NO_PROMPT = 'true'
         { Select-ArcBoxFlavor -Interactive $true } | Should -Throw '*interactive input is unavailable or disabled*'
         Should -Invoke Read-Host -Times 0
+    }
+}
+
+Describe 'ArcBox shared password configuration' {
+    BeforeEach {
+        Initialize-TestEnvironment
+        Mock Set-ArcBoxEnvironmentValue { Set-Item -Path "Env:$Name" -Value $Value }
+    }
+    AfterEach { Restore-TestEnvironment }
+
+    It 'prompts securely, confirms, validates, and persists the shared password once' {
+        $env:JS_ARCBOX_PASSWORD = $null
+        $securePassword = ConvertTo-SecureString 'ArcBoxTestPassword1!' -AsPlainText -Force
+        Mock Read-Host { $securePassword }
+        Initialize-ArcBoxPassword -Interactive $true
+        $env:JS_ARCBOX_PASSWORD | Should -Be 'ArcBoxTestPassword1!'
+        Should -Invoke Read-Host -Exactly -Times 2 -ParameterFilter { $AsSecureString }
+        Should -Invoke Set-ArcBoxEnvironmentValue -Exactly -Times 1 -ParameterFilter {
+            $Name -eq 'JS_ARCBOX_PASSWORD' -and $Value -eq 'ArcBoxTestPassword1!'
+        }
+    }
+
+    It 'does not prompt again when the shared password is already configured' {
+        Mock Read-Host { throw 'Unexpected password prompt.' }
+        Initialize-ArcBoxPassword -Interactive $true
+        Should -Invoke Read-Host -Times 0
+    }
+
+    It 'requires an explicitly configured password when prompts are unavailable' {
+        $env:JS_ARCBOX_PASSWORD = $null
+        { Initialize-ArcBoxPassword -Interactive $false } | Should -Throw '*No shared ArcBox password is configured*'
+    }
+
+    It 'rejects a password that does not meet the shared Windows password requirements' {
+        $env:JS_ARCBOX_PASSWORD = 'too-short'
+        { Initialize-ArcBoxPassword } | Should -Throw '*12-123 characters*'
+    }
+
+    It 'rejects password characters that cannot be safely substituted into the Bicep parameter file' {
+        foreach ($password in @('ArcBoxTestPassword1"', 'ArcBoxTestPassword1\')) {
+            $env:JS_ARCBOX_PASSWORD = $password
+            { Initialize-ArcBoxPassword } | Should -Throw '*double quotes, and backslashes*'
+        }
+    }
+
+    It 'rejects mismatched secure password entries without persisting either value' {
+        $script:promptCount = 0
+        Mock Read-Host {
+            $script:promptCount++
+            $value = if ($script:promptCount -eq 1) { 'ArcBoxTestPassword1!' } else { 'DifferentPassword1!' }
+            ConvertTo-SecureString $value -AsPlainText -Force
+        }
+        $env:JS_ARCBOX_PASSWORD = $null
+        { Initialize-ArcBoxPassword -Interactive $true } | Should -Throw '*did not match*'
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0
+    }
+}
+
+Describe 'ArcBox shared password deployment wiring' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $parameters = Get-Content (Join-Path $arcboxRoot 'bicep\main.azd.parameters.json') -Raw -ErrorAction Stop
+        $wrapper = Get-Content (Join-Path $arcboxRoot 'bicep\main.azd.bicep') -Raw -ErrorAction Stop
+        $template = Get-Content (Join-Path $arcboxRoot 'bicep\main.bicep') -Raw -ErrorAction Stop
+        $armTemplate = Get-Content (Join-Path $arcboxRoot 'ARM\azuredeploy.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+        $servers = Get-Content (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1') -Raw -ErrorAction Stop
+        $sqlMi = Get-Content (Join-Path $arcboxRoot 'artifacts\DeploySQLMIADAuth.ps1') -Raw -ErrorAction Stop
+    }
+    It 'passes the prompted secret to both secure Bicep password parameters without generating a replacement' {
+        $parameters | Should -Match '(?s)"windowsAdminPassword"\s*:\s*\{\s*"value"\s*:\s*"\$\{JS_ARCBOX_PASSWORD\}"'
+        $parameters | Should -Match '(?s)"registryPassword"\s*:\s*\{\s*"value"\s*:\s*"\$\{JS_ARCBOX_PASSWORD\}"'
+        $wrapper | Should -Match '@secure\(\)\s+@minLength\(12\)\s+@maxLength\(123\)\s+param windowsAdminPassword string'
+        $wrapper | Should -Not -Match "type: 'generate'"
+        $template | Should -Not -Match 'param (windowsAdminPassword|registryPassword) string\s*=\s*newGuid\(\)'
+        $armTemplate.parameters.windowsAdminPassword.PSObject.Properties['defaultValue'] | Should -BeNullOrEmpty
+        $armTemplate.parameters.registryPassword.PSObject.Properties['defaultValue'] | Should -BeNullOrEmpty
+    }
+    It 'uses the Key Vault password for nested guest credentials and the SQL Server connection' {
+        $servers | Should -Match 'Get-AzKeyVaultSecret -VaultName .+ -Name ''windowsAdminPassword'''
+        $servers | Should -Match 'Set-ArcBoxWindowsGuestPassword -VMName \$SQLvmName -Password \$nestedGuestPassword'
+        $servers | Should -Match '\$login\.ChangePassword\(\$Password\)'
+        $servers | Should -Match '\$username`:\$Password" \| sudo chpasswd'
+        $sqlMi | Should -Match '"password": "\$AZDATA_PASSWORD"'
     }
 }
 

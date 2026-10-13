@@ -17,6 +17,34 @@ $resourceGroup = $env:resourceGroup
 $resourceTags = $env:resourceTags
 $namingPrefix = $env:namingPrefix
 
+function Set-ArcBoxWindowsGuestPassword {
+    param(
+        [Parameter(Mandatory)][string]$VMName,
+        [Parameter(Mandatory)][string]$Password
+    )
+
+    $securePassword = ConvertTo-SecureString $Password -AsPlainText -Force
+    $credential = [System.Management.Automation.PSCredential]::new('Administrator', $securePassword)
+    try {
+        Invoke-Command -VMName $VMName -Credential $credential -ScriptBlock { $null = hostname } -ErrorAction Stop | Out-Null
+        return $credential
+    } catch {
+        # Prebuilt Windows VHDs ship with this password; use it only to rotate their Administrator account.
+        $bootstrapPassword = ConvertTo-SecureString 'JS123!!' -AsPlainText -Force
+        $bootstrapCredential = [System.Management.Automation.PSCredential]::new('Administrator', $bootstrapPassword)
+        try {
+            Invoke-Command -VMName $VMName -Credential $bootstrapCredential -ArgumentList $Password -ScriptBlock {
+                param([string]$NewPassword)
+                $secureNewPassword = ConvertTo-SecureString $NewPassword -AsPlainText -Force
+                Set-LocalUser -Name 'Administrator' -Password $secureNewPassword -ErrorAction Stop
+            } -ErrorAction Stop
+        } catch {
+            throw "Could not verify or set the shared password on Windows guest '$VMName'. Verify the guest is running and its local Administrator account is available. Guest error: $($_.Exception.Message)"
+        }
+    }
+    return $credential
+}
+
 function Save-ArcBoxGuestDisk {
     param([string]$SourceName, [string]$DestinationPath)
 
@@ -220,14 +248,8 @@ if ($Env:flavor -ne 'DevOps') {
         New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix 10.10.1.0/24
     }
 
-    Write-Host 'Creating VM Credentials'
-    # Hard-coded username and password for the nested VMs
+    Write-Host 'Preparing VM credentials'
     $nestedWindowsUsername = 'Administrator'
-    $nestedWindowsPassword = 'JS123!!'
-
-    # Create Windows credential object
-    $secWindowsPassword = ConvertTo-SecureString $nestedWindowsPassword -AsPlainText -Force
-    $winCreds = New-Object System.Management.Automation.PSCredential ($nestedWindowsUsername, $secWindowsPassword)
 
     # Creating Hyper-V Manager desktop shortcut
     Write-Host 'Creating Hyper-V Shortcut'
@@ -256,6 +278,15 @@ if ($Env:flavor -ne 'DevOps') {
 
     Write-Header 'Az PowerShell Login'
     Connect-AzAccount -Identity -Tenant $tenantId -Subscription $subscriptionId
+
+    $keyVault = Get-AzKeyVault -ResourceGroupName $resourceGroup -ErrorAction Stop | Select-Object -First 1
+    if ($null -eq $keyVault) {
+        throw "Could not find the ArcBox Key Vault in resource group '$resourceGroup'."
+    }
+    $nestedGuestPassword = Get-AzKeyVaultSecret -VaultName $keyVault.VaultName -Name 'windowsAdminPassword' -AsPlainText -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($nestedGuestPassword)) {
+        throw "Key Vault '$($keyVault.VaultName)' returned an empty windowsAdminPassword; nested guest setup cannot continue."
+    }
 
     $DeploymentProgressString = 'Started ArcServersLogonScript'
 
@@ -327,6 +358,7 @@ if ($Env:flavor -ne 'DevOps') {
 
     # Restarting Windows VM Network Adapters
     Write-Host 'Restarting Network Adapters'
+    $winCreds = Set-ArcBoxWindowsGuestPassword -VMName $SQLvmName -Password $nestedGuestPassword
     Start-Sleep -Seconds 5
     Invoke-Command -VMName $SQLvmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
     Start-Sleep -Seconds 20
@@ -360,6 +392,15 @@ if ($Env:flavor -ne 'DevOps') {
     Invoke-WebRequest ($Env:templateBaseUrl + 'artifacts/prepareSqlServerForAssessment.ps1') -OutFile $nestedVMArcBoxDir\prepareSqlServerForAssessment.ps1
     Copy-VMFile $SQLvmName -SourcePath "$Env:ArcBoxDir\prepareSqlServerForAssessment.ps1" -DestinationPath "$nestedVMArcBoxDir\prepareSqlServerForAssessment.ps1" -CreateFullPath -FileSource Host -Force
     Invoke-Command -VMName $SQLvmName -ScriptBlock { powershell -File $Using:nestedVMArcBoxDir\prepareSqlServerForAssessment.ps1 } -Credential $winCreds
+    Invoke-Command -VMName $SQLvmName -Credential $winCreds -ArgumentList $nestedGuestPassword -ScriptBlock {
+        param([string]$Password)
+        $server = New-Object Microsoft.SqlServer.Management.Smo.Server('.')
+        $login = $server.Logins['sa']
+        if ($null -eq $login) {
+            throw "The SQL Server 'sa' login was not found."
+        }
+        $login.ChangePassword($Password)
+    } -ErrorAction Stop
 
     # Copy installation script to nested Windows VMs
     Write-Output 'Transferring installation script to nested Windows VMs...'
@@ -572,13 +613,11 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Header 'Creating VM Credentials'
-        # Hard-coded username and password for the nested VMs
+        # Use the shared ArcBox password for all nested guest accounts.
         $nestedLinuxUsername = 'jumpstart'
-        $nestedLinuxPassword = 'JS123!!'
-
-        # Create Linux credential object
-        $secLinuxPassword = ConvertTo-SecureString $nestedLinuxPassword -AsPlainText -Force
-        $linCreds = New-Object System.Management.Automation.PSCredential ($nestedLinuxUsername, $secLinuxPassword)
+        foreach ($vmName in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
+            $null = Set-ArcBoxWindowsGuestPassword -VMName $vmName -Password $nestedGuestPassword
+        }
 
         # Restarting Windows VM Network Adapters
         Write-Header 'Restarting Network Adapters'
@@ -771,6 +810,14 @@ if ($Env:flavor -ne 'DevOps') {
 
         Write-Output 'Onboarding the nested Linux VMs as an Azure Arc-enabled servers'
         $UbuntuSessions = New-PSSession -HostName $Ubuntu01VmIp, $Ubuntu02VmIp -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername -ConnectingTimeout 60000 -ErrorAction Stop
+        Invoke-Command -Session $UbuntuSessions -ScriptBlock {
+            param([string]$Password)
+            $username = $using:nestedLinuxUsername
+            "$username`:$Password" | sudo chpasswd
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to set the shared password for Linux guest user '$username'."
+            }
+        } -ArgumentList $nestedGuestPassword -ErrorAction Stop
         Invoke-JSSudoCommand -Session $UbuntuSessions -Command "sh /home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'

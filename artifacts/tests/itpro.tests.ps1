@@ -7,7 +7,6 @@ BeforeDiscovery {
         @{ Name = 'win22sql19'; MajorVersion = 15; DatabaseName = 'AdventureWorksLT2019' }
         @{ Name = 'win25sql25'; MajorVersion = 17; DatabaseName = 'AdventureWorksLT2025' }
     )
-    $null = Connect-AzAccount -Identity -Tenant $env:tenantId -Subscription $env:subscriptionId
 }
 
 # Assert that the Hyper-V virtual machines in $VMs exists, are running and connected as Azure Arc-enabled servers
@@ -37,7 +36,16 @@ Describe "<vm>" -ForEach $VMs {
 Describe "Nested SQL Server on <Name>" -ForEach $SqlVMs {
     BeforeAll {
         $sqlVM = $_
-        $password = ConvertTo-SecureString 'JS123!!' -AsPlainText -Force
+        $null = Connect-AzAccount -Identity -Tenant $env:tenantId -Subscription $env:subscriptionId
+        $keyVault = Get-AzKeyVault -ResourceGroupName $env:resourceGroup -ErrorAction Stop | Select-Object -First 1
+        if ($null -eq $keyVault) {
+            throw "Could not find the ArcBox Key Vault in resource group '$env:resourceGroup'."
+        }
+        $nestedGuestPassword = Get-AzKeyVaultSecret -VaultName $keyVault.VaultName -Name 'windowsAdminPassword' -AsPlainText -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($nestedGuestPassword)) {
+            throw "Key Vault '$($keyVault.VaultName)' returned an empty windowsAdminPassword; nested guest checks cannot continue."
+        }
+        $password = ConvertTo-SecureString $nestedGuestPassword -AsPlainText -Force
         $credentials = [System.Management.Automation.PSCredential]::new('Administrator', $password)
     }
 

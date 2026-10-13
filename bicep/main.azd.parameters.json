@@ -14,6 +14,12 @@
     "windowsAdminUsername": {
       "value": "${JS_WINDOWS_ADMIN_USERNAME=arcdemo}"
     },
+    "windowsAdminPassword": {
+      "value": "${JS_ARCBOX_PASSWORD}"
+    },
+    "registryPassword": {
+      "value": "${JS_ARCBOX_PASSWORD}"
+    },
     "sshRSAPublicKey": {
       "value": "${JS_SSH_PUBLIC_KEY}"
     },

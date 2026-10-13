@@ -16,11 +16,59 @@ function Set-ArcBoxEnvironmentValue {
         [Parameter(Mandatory)][string]$Value
     )
 
-    & azd env set $Name $Value --environment $env:AZURE_ENV_NAME
+    & azd env set "$Name=$Value" --environment $env:AZURE_ENV_NAME
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to save $Name to azd environment '$env:AZURE_ENV_NAME'."
     }
     Set-Item -Path "Env:$Name" -Value $Value
+}
+
+function ConvertFrom-ArcBoxSecureString {
+    param([Parameter(Mandatory)][System.Security.SecureString]$SecureString)
+
+    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureString)
+    try {
+        [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
+    }
+}
+
+function Assert-ArcBoxPassword {
+    param([Parameter(Mandatory)][string]$Password)
+
+    if ($Password.Length -lt 12 -or $Password.Length -gt 123 -or
+        $Password -cnotmatch '[a-z]' -or $Password -cnotmatch '[A-Z]' -or
+        $Password -cnotmatch '[0-9]' -or $Password -cnotmatch '[^a-zA-Z0-9]' -or
+        $Password -match '[\x00-\x1f\x7f"\\]') {
+        throw 'The shared ArcBox password must be 12-123 characters and include lowercase, uppercase, numeric, and special characters; control characters, double quotes, and backslashes are not supported.'
+    }
+}
+
+function Initialize-ArcBoxPassword {
+    param([bool]$Interactive = (-not [Console]::IsInputRedirected -and [Environment]::UserInteractive))
+
+    if (-not [string]::IsNullOrWhiteSpace($env:JS_ARCBOX_PASSWORD)) {
+        Assert-ArcBoxPassword -Password $env:JS_ARCBOX_PASSWORD
+        return
+    }
+    if (-not $Interactive -or $env:AZD_NO_PROMPT -eq 'true') {
+        throw 'No shared ArcBox password is configured. Set JS_ARCBOX_PASSWORD in the azd environment before provisioning, or run interactively to enter it.'
+    }
+
+    $securePassword = Read-Host 'Enter the shared ArcBox password' -AsSecureString
+    $secureConfirmation = Read-Host 'Confirm the shared ArcBox password' -AsSecureString
+    if ($null -eq $securePassword -or $null -eq $secureConfirmation) {
+        throw 'The shared ArcBox password was not provided.'
+    }
+
+    $password = ConvertFrom-ArcBoxSecureString -SecureString $securePassword
+    $confirmation = ConvertFrom-ArcBoxSecureString -SecureString $secureConfirmation
+    if ($password -cne $confirmation) {
+        throw 'The shared ArcBox password entries did not match.'
+    }
+    Assert-ArcBoxPassword -Password $password
+    Set-ArcBoxEnvironmentValue -Name JS_ARCBOX_PASSWORD -Value $password
 }
 
 function Get-ArcBoxTimeoutMinutes {
@@ -79,6 +127,8 @@ function Initialize-ArcBoxDeployment {
     if ($flavor -cnotin @('ITPro', 'DevOps', 'DataOps')) {
         throw "JS_ARCBOX_FLAVOR must be ITPro, DevOps, or DataOps."
     }
+
+    Initialize-ArcBoxPassword
 
     $null = Invoke-ArcBoxAz -Arguments @('account', 'show', '--output', 'json')
     $resourceGroup = "$($env:AZURE_ENV_NAME)-rg"

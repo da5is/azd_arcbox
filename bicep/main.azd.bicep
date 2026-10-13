@@ -20,30 +20,9 @@ param windowsAdminUsername string = 'arcdemo'
 @secure()
 @minLength(12)
 @maxLength(123)
-@metadata({
-  azd: {
-    type: 'generate'
-    config: {
-      length: 24
-      minLower: 1
-      minUpper: 1
-      minNumeric: 1
-      minSpecial: 1
-    }
-  }
-})
 param windowsAdminPassword string
 
 @secure()
-@metadata({
-  azd: {
-    type: 'generate'
-    config: {
-      length: 32
-      noSpecial: true
-    }
-  }
-})
 param registryPassword string
 
 @secure()
