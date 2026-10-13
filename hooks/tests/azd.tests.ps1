@@ -210,6 +210,53 @@ Describe 'ArcBox shared password deployment wiring' {
     }
 }
 
+Describe 'ArcBox SQL password rotation session' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1'), [ref]$null, [ref]$null)
+        $rotation = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+            $node.ScriptBlock.Extent.Text -match '\$login\.ChangePassword'
+        }, $true)
+        if ($null -eq $rotation) { throw 'SQL password rotation script block not found.' }
+        $rotatePassword = $rotation.ScriptBlock.GetScriptBlock()
+    }
+    BeforeEach {
+        $script:sqlModuleLoaded = $false
+        $script:login = [pscustomobject]@{ Password = $null }
+        $script:login | Add-Member -MemberType ScriptMethod -Name ChangePassword -Value {
+            param([string]$Value)
+            $this.Password = $Value
+        }
+        Mock Import-Module { $script:sqlModuleLoaded = $true } -ParameterFilter { $Name -eq 'SqlServer' }
+        Mock New-Object {
+            if (-not $script:sqlModuleLoaded) { throw 'SMO is not loaded in this session.' }
+            [pscustomobject]@{ Logins = @{ sa = $script:login } }
+        } -ParameterFilter { $TypeName -like 'Microsoft.SqlServer.Management.Smo.Server*' }
+    }
+    It 'loads SMO in the password rotation session before constructing the server and changing the password' {
+        & $rotatePassword 'ArcBoxTestPassword1!'
+        $script:login.Password | Should -Be 'ArcBoxTestPassword1!'
+        Should -Invoke Import-Module -Exactly -Times 1 -ParameterFilter {
+            $Name -eq 'SqlServer' -and $Force -and $ErrorAction -eq 'Stop'
+        }
+    }
+    It 'fails explicitly if the SqlServer module cannot be loaded' {
+        Mock Import-Module { throw 'SqlServer module unavailable.' } -ParameterFilter { $Name -eq 'SqlServer' }
+        { & $rotatePassword 'ArcBoxTestPassword1!' } | Should -Throw '*SqlServer module unavailable*'
+        Should -Invoke New-Object -Times 0
+        $script:login.Password | Should -BeNullOrEmpty
+    }
+    It 'fails explicitly when the sa login is missing' {
+        Mock New-Object { [pscustomobject]@{ Logins = @{} } } -ParameterFilter {
+            $TypeName -like 'Microsoft.SqlServer.Management.Smo.Server*'
+        }
+        { & $rotatePassword 'ArcBoxTestPassword1!' } | Should -Throw '*sa*login was not found*'
+    }
+}
+
 Describe 'ArcBox prerequisites' {
     BeforeEach {
         Initialize-TestEnvironment

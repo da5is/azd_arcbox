@@ -394,6 +394,7 @@ if ($Env:flavor -ne 'DevOps') {
     Invoke-Command -VMName $SQLvmName -ScriptBlock { powershell -File $Using:nestedVMArcBoxDir\prepareSqlServerForAssessment.ps1 } -Credential $winCreds
     Invoke-Command -VMName $SQLvmName -Credential $winCreds -ArgumentList $nestedGuestPassword -ScriptBlock {
         param([string]$Password)
+        Import-Module SqlServer -Force -ErrorAction Stop
         $server = New-Object Microsoft.SqlServer.Management.Smo.Server('.')
         $login = $server.Logins['sa']
         if ($null -eq $login) {
