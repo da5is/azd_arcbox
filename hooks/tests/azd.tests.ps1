@@ -20,7 +20,7 @@ BeforeAll {
     $environmentNames = @(
         'AZURE_ENV_NAME', 'AZURE_SUBSCRIPTION_ID', 'AZURE_LOCATION', 'AZURE_RESOURCE_GROUP',
         'JS_ARCBOX_FLAVOR', 'JS_ARCBOX_TIMEOUT_MINUTES', 'JS_SSH_PUBLIC_KEY', 'JS_CUSTOM_LOCATION_RP_ID',
-        'AZD_NO_PROMPT', 'JS_ARCBOX_PASSWORD'
+        'AZD_NO_PROMPT', 'JS_ARCBOX_PASSWORD', 'JS_NESTED_SQL_MODE'
     )
     function Initialize-TestEnvironment {
         $script:savedEnvironment = @{}
@@ -33,6 +33,7 @@ BeforeAll {
         $env:AZURE_LOCATION = 'eastus2'
         $env:AZURE_RESOURCE_GROUP = 'arcbox-test-rg'
         $env:JS_ARCBOX_PASSWORD = 'ArcBoxTestPassword1!'
+        $env:JS_NESTED_SQL_MODE = 'Developer'
         $script:originalExitCode = $global:LASTEXITCODE
     }
 
@@ -123,6 +124,63 @@ Describe 'ArcBox flavor selection' {
     It 'honors an explicitly disabled prompt even with a terminal' {
         $env:AZD_NO_PROMPT = 'true'
         { Select-ArcBoxFlavor -Interactive $true } | Should -Throw '*interactive input is unavailable or disabled*'
+        Should -Invoke Read-Host -Times 0
+    }
+}
+
+Describe 'ArcBox SQL mode selection' {
+    BeforeEach {
+        Initialize-TestEnvironment
+        Mock Read-Host { throw 'Unexpected interactive prompt.' }
+        Mock Write-Host {}
+        Mock Write-Warning {}
+    }
+    AfterEach { Restore-TestEnvironment }
+
+    It 'selects <mode> from <selection>' -ForEach @(
+        @{ selection = '1'; mode = 'Developer' },
+        @{ selection = 'dev'; mode = 'Developer' },
+        @{ selection = 'Developer'; mode = 'Developer' },
+        @{ selection = '2'; mode = 'Evaluation' },
+        @{ selection = 'eval'; mode = 'Evaluation' },
+        @{ selection = ' Evaluation '; mode = 'Evaluation' }
+    ) {
+        $script:selection = $selection
+        Mock Read-Host { $script:selection }
+        Select-ArcBoxSqlMode -Interactive $true | Should -Be $mode
+        Should -Invoke Read-Host -Exactly -Times 1
+        Should -Invoke Write-Host -Exactly -Times 1 -ParameterFilter { $Object -like '*1. Developer*' }
+        Should -Invoke Write-Host -Exactly -Times 1 -ParameterFilter { $Object -like '*2. Evaluation*' }
+        Should -Invoke Write-Host -Exactly -Times 0 -ParameterFilter { $Object -like '*3.*' }
+    }
+    It 'reprompts for invalid SQL input <invalid> without defaulting to Developer' -ForEach @(
+        @{ invalid = 'Enterprise' }, @{ invalid = '3' }, @{ invalid = 'byol' }
+    ) {
+        $script:promptCount = 0
+        $script:invalidSelection = $invalid
+        Mock Read-Host {
+            $script:promptCount++
+            if ($script:promptCount -eq 1) { $script:invalidSelection } else { 'eval' }
+        }
+        Select-ArcBoxSqlMode -Interactive $true | Should -Be Evaluation
+        Should -Invoke Read-Host -Exactly -Times 2
+        Should -Invoke Write-Warning -Exactly -Times 1
+    }
+    It 'cancels SQL selection for <selection>' -ForEach @(
+        @{ selection = '' }, @{ selection = 'q' }, @{ selection = $null }
+    ) {
+        $script:selection = $selection
+        Mock Read-Host { $script:selection }
+        { Select-ArcBoxSqlMode -Interactive $true } | Should -Throw '*selection cancelled*'
+        Should -Invoke Read-Host -Exactly -Times 1
+    }
+    It 'requires explicit SQL configuration without terminal input' {
+        { Select-ArcBoxSqlMode -Interactive $false } | Should -Throw '*azd env set JS_NESTED_SQL_MODE*'
+        Should -Invoke Read-Host -Times 0
+    }
+    It 'honors AZD_NO_PROMPT for SQL mode selection' {
+        $env:AZD_NO_PROMPT = 'true'
+        { Select-ArcBoxSqlMode -Interactive $true } | Should -Throw '*interactive input is unavailable or disabled*'
         Should -Invoke Read-Host -Times 0
     }
 }
@@ -263,6 +321,7 @@ Describe 'ArcBox prerequisites' {
         $env:JS_ARCBOX_FLAVOR = 'ITPro'
         Mock Get-Command { [pscustomobject]@{ Name = $Name } }
         Mock Select-ArcBoxFlavor { throw 'Unexpected flavor selection.' }
+        Mock Select-ArcBoxSqlMode { throw 'Unexpected SQL mode selection.' }
         Mock Read-Host { throw 'Unexpected interactive prompt.' }
         Mock Set-ArcBoxEnvironmentValue { Set-Item -Path "Env:$Name" -Value $Value }
         Mock Invoke-ArcBoxAz {
@@ -282,11 +341,11 @@ Describe 'ArcBox prerequisites' {
                         } | ConvertTo-Json
                     }
                 }
-                AfterEach { Restore-TestEnvironment }
                 'ad' { '["00000000-0000-0000-0000-000000000002"]' }
                 default { throw "Unexpected mocked command: $($Arguments -join ' ')" }
             }
         }
+        AfterEach { Restore-TestEnvironment }
     }
 
     It 'uses configured ITPro without prompting, generating SSH keys, or reading the directory' {
@@ -339,6 +398,77 @@ Describe 'ArcBox prerequisites' {
         Initialize-ArcBoxDeployment
         Should -Invoke Select-ArcBoxFlavor -Times 0
         Should -Invoke Read-Host -Times 0
+    }
+
+    It 'prompts for SQL mode after ITPro selection and persists it for subsequent runs' {
+        $env:JS_ARCBOX_FLAVOR = $null
+        $env:JS_NESTED_SQL_MODE = $null
+        Mock Select-ArcBoxFlavor { 'ITPro' }
+        Mock Select-ArcBoxSqlMode { 'Evaluation' }
+        Initialize-ArcBoxDeployment
+        $env:JS_NESTED_SQL_MODE | Should -Be Evaluation
+        Should -Invoke Set-ArcBoxEnvironmentValue -Exactly -Times 1 -ParameterFilter {
+            $Name -eq 'JS_NESTED_SQL_MODE' -and $Value -eq 'Evaluation'
+        }
+        Initialize-ArcBoxDeployment
+        Should -Invoke Select-ArcBoxFlavor -Exactly -Times 1
+        Should -Invoke Select-ArcBoxSqlMode -Exactly -Times 1
+    }
+    It 'skips the SQL menu for configured <mode>' -ForEach @(
+        @{ mode = 'Developer' }, @{ mode = 'Evaluation' }
+    ) {
+        $env:JS_NESTED_SQL_MODE = $mode
+        $env:AZD_NO_PROMPT = 'true'
+        Initialize-ArcBoxDeployment
+        $env:JS_NESTED_SQL_MODE | Should -Be $mode
+        Should -Invoke Select-ArcBoxSqlMode -Times 0
+        Should -Invoke Read-Host -Times 0
+    }
+    It 'skips SQL selection and persistence for <flavor>' -ForEach @(
+        @{ flavor = 'DevOps' }, @{ flavor = 'DataOps' }
+    ) {
+        $env:JS_ARCBOX_FLAVOR = $flavor
+        $env:JS_NESTED_SQL_MODE = $null
+        $env:JS_SSH_PUBLIC_KEY = 'ssh-rsa dGVzdA== arcbox-test'
+        $env:JS_CUSTOM_LOCATION_RP_ID = '00000000-0000-0000-0000-000000000002'
+        Initialize-ArcBoxDeployment
+        Should -Invoke Select-ArcBoxSqlMode -Times 0
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0 -ParameterFilter { $Name -eq 'JS_NESTED_SQL_MODE' }
+    }
+    It 'stops before Azure operations or persistence if SQL selection is cancelled' {
+        $env:JS_NESTED_SQL_MODE = $null
+        Mock Select-ArcBoxSqlMode { throw 'SQL installation mode selection cancelled.' }
+        { Initialize-ArcBoxDeployment } | Should -Throw '*selection cancelled*'
+        Should -Invoke Invoke-ArcBoxAz -Times 0
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0
+    }
+    It 'requires an explicit SQL mode for unattended ITPro deployment' {
+        $env:JS_NESTED_SQL_MODE = $null
+        $env:AZD_NO_PROMPT = 'true'
+        Mock Select-ArcBoxSqlMode { throw "Run 'azd env set JS_NESTED_SQL_MODE <Developer|Evaluation>' before provisioning." }
+        { Initialize-ArcBoxDeployment } | Should -Throw '*JS_NESTED_SQL_MODE*'
+        Should -Invoke Invoke-ArcBoxAz -Times 0
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0
+    }
+    It 'rejects an invalid configured SQL mode before Azure operations' {
+        $env:JS_NESTED_SQL_MODE = 'PAYG'
+        { Initialize-ArcBoxDeployment } | Should -Throw '*must be Developer or Evaluation*'
+        Should -Invoke Invoke-ArcBoxAz -Times 0
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0
+    }
+    It 'does not save a selected SQL mode when the resource group cannot be adopted' {
+        $env:JS_NESTED_SQL_MODE = $null
+        Mock Select-ArcBoxSqlMode { 'Evaluation' }
+        Mock Invoke-ArcBoxAz { 'true' } -ParameterFilter { $Arguments[0] -eq 'group' }
+        Mock Invoke-ArcBoxAz { '[]' } -ParameterFilter { $Arguments[0] -eq 'deployment' }
+        { Initialize-ArcBoxDeployment } | Should -Throw '*without an ArcBox azd deployment*'
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0
+    }
+    It 'provides migration guidance for an environment with the removed BYOL mode' {
+        $env:JS_NESTED_SQL_MODE = 'BYOL'
+        { Initialize-ArcBoxDeployment } | Should -Throw '*azd env set JS_NESTED_SQL_MODE Evaluation*'
+        Should -Invoke Invoke-ArcBoxAz -Times 0
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0
     }
 
     It 'rejects an invalid flavor before Azure operations' {
@@ -501,6 +631,7 @@ Describe 'ArcBox bootstrap argument binding' {
     flavor = $flavor
     customLocationRPOID = $customLocationRPOID
     namingPrefix = $namingPrefix
+    nestedSqlMode = $nestedSqlMode
 } | ConvertTo-Json -Compress
 '@
         Set-Content -Path (Join-Path $TestDrive 'Bootstrap.ps1') -Value $probe
@@ -534,6 +665,7 @@ Describe 'ArcBox bootstrap argument binding' {
             flavor = $flavor
             namingPrefix = 'ArcBox'
             resourceTags = '{}'
+            nestedSqlMode = 'Evaluation'
             customLocationRPArgument = if ($objectId) { "-customLocationRPOID $objectId" } else { '' }
         }
         $command = [regex]::Replace($commandTemplate, '\$\{([^}]+)\}', {
@@ -551,6 +683,7 @@ Describe 'ArcBox bootstrap argument binding' {
             $boundParameters.flavor | Should -Be $flavor
             $boundParameters.customLocationRPOID | Should -Be $objectId
             $boundParameters.namingPrefix | Should -Be ArcBox
+            $boundParameters.nestedSqlMode | Should -Be Evaluation
         } finally {
             Set-Location $previousLocation
         }
@@ -836,6 +969,7 @@ Describe 'ArcBox SQL extension installation' {
             $settings = Get-Content $settingsArgument.Substring(1) -Raw | ConvertFrom-Json
             $settings.LicenseType | Should -Be 'LicenseOnly'
             $settings.SqlManagement.IsEnabled | Should -BeTrue
+            $settings.PSObject.Properties.Name | Should -Not -Contain enableExtendedSecurityUpdates
         } -ParameterFilter { $Arguments -contains 'create' }
         Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType LicenseOnly
         Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
@@ -885,6 +1019,200 @@ Describe 'ArcBox SQL extension installation' {
         Mock az { $global:LASTEXITCODE = 0; 'Succeeded' } -ParameterFilter { $Arguments -contains 'rest' }
         Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid
         Should -Invoke az -Exactly -Times 0 -ParameterFilter { $Arguments -contains 'create' }
+        Should -Invoke az -Exactly -Times 0 -ParameterFilter { $Arguments -contains 'update' }
+    }
+    It 'preserves manually configured Software Assurance and ESU settings on retries' {
+        $script:existingSettings = '{"LicenseType":"Paid","enableExtendedSecurityUpdates":true}'
+        Mock az {
+            $global:LASTEXITCODE = 0
+            'Succeeded'
+        } -ParameterFilter { $Arguments -contains 'rest' }
+        Mock az {
+            $script:existingSettings = 'overwritten'
+            throw 'Existing extension settings must not be changed.'
+        } -ParameterFilter { $Arguments -contains 'update' -or $Arguments -contains 'create' }
+        Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType LicenseOnly
+        $script:existingSettings | Should -Be '{"LicenseType":"Paid","enableExtendedSecurityUpdates":true}'
+        Should -Invoke az -Exactly -Times 1
+        Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
+    }
+    It 'waits for an existing pending extension without overwriting its configuration' {
+        Mock az {
+            $global:LASTEXITCODE = 0
+            $script:listCalls++
+            if ($script:listCalls -eq 1) { 'Updating' } else { 'Succeeded' }
+        } -ParameterFilter { $Arguments -contains 'rest' }
+        Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType LicenseOnly
+        Should -Invoke az -Exactly -Times 0 -ParameterFilter { $Arguments -contains 'create' -or $Arguments -contains 'update' }
+    }
+    It 'does not reset licensing to repair a failed existing extension' {
+        Mock az { $global:LASTEXITCODE = 0; 'Failed' } -ParameterFilter { $Arguments -contains 'rest' }
+        { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType LicenseOnly } | Should -Throw '*Repair the existing extension*'
+        Should -Invoke az -Exactly -Times 0 -ParameterFilter { $Arguments -contains 'create' -or $Arguments -contains 'update' }
+    }
+}
+
+Describe 'ArcBox SQL installation modes' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $installer = Get-Content (Join-Path $arcboxRoot 'artifacts\InstallNestedSqlServer.ps1') -Raw
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($installer, [ref]$null, [ref]$null)
+        foreach ($functionName in @('Assert-SqlEdition', 'Invoke-SqlServerSetup')) {
+            $function = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
+            }, $true)
+            . ([scriptblock]::Create($function.Extent.Text))
+        }
+        $assignment = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$versions'
+        }, $true)
+        . ([scriptblock]::Create($assignment.Extent.Text))
+        function Save-SqlDownload { param($Uri, $Path) }
+        function Invoke-SqlSetupProcess { param($FilePath, $Arguments) }
+        function Mount-DiskImage { param($ImagePath, [switch]$PassThru) }
+        function Dismount-DiskImage { param($ImagePath) }
+        function Get-Volume { param([Parameter(ValueFromPipeline)]$InputObject) }
+    }
+    BeforeEach {
+        $SqlVersion = '2019'
+        $InstallationMode = 'Developer'
+        $installDirectory = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        $null = New-Item $installDirectory -ItemType Directory
+        Mock Write-Warning {}
+        Mock Save-SqlDownload {}
+        Mock Mount-DiskImage { [pscustomobject]@{ ImagePath = $ImagePath } }
+        Mock Get-Volume { [pscustomobject]@{ DriveLetter = 'TestDrive' } }
+        Mock Dismount-DiskImage {}
+        Set-Content (Join-Path $TestDrive 'setup.exe') 'mock setup'
+        Mock Invoke-SqlSetupProcess {
+            if ($FilePath -like '*SSEI-*.exe') {
+                $mediaPath = ($Arguments | Where-Object { $_ -like '/MediaPath=*' }) -replace '^/MediaPath="|"$', ''
+                Set-Content (Join-Path $mediaPath 'downloaded.iso') 'mock ISO'
+            }
+        }
+    }
+    It 'retains Developer as the default and rejects unsupported installation modes' {
+        $probe = [scriptblock]::Create($ast.ParamBlock.Extent.Text + '; $InstallationMode')
+        & $probe -SqlVersion 2019 | Should -Be Developer
+        { & $probe -SqlVersion 2019 -InstallationMode PAYG } | Should -Throw
+        { & $probe -SqlVersion 2019 -InstallationMode BYOL } | Should -Throw
+        $ast.ParamBlock.Parameters.Name.VariablePath.UserPath | Should -Not -Contain ByolEdition
+    }
+    It 'accepts <edition> in <mode> mode' -ForEach @(
+        @{ mode = 'Developer'; edition = 'Developer Edition (64-bit)' },
+        @{ mode = 'Developer'; edition = 'Enterprise Developer Edition (64-bit)' },
+        @{ mode = 'Evaluation'; edition = 'Enterprise Evaluation Edition (64-bit)' },
+        @{ mode = 'Evaluation'; edition = 'Standard Edition (64-bit)' },
+        @{ mode = 'Evaluation'; edition = 'Enterprise Edition (64-bit)' }
+    ) {
+        $InstallationMode = $mode
+        { Assert-SqlEdition -Edition $edition } | Should -Not -Throw
+    }
+    It 'rejects incompatible existing editions in <mode> mode: <edition>' -ForEach @(
+        @{ mode = 'Evaluation'; edition = 'Developer Edition (64-bit)' },
+        @{ mode = 'Developer'; edition = 'Enterprise Evaluation Edition (64-bit)' },
+        @{ mode = 'Evaluation'; edition = 'Enterprise Developer Edition (64-bit)' },
+        @{ mode = 'Evaluation'; edition = 'Express Edition (64-bit)' },
+        @{ mode = 'Developer'; edition = 'Enterprise Edition (64-bit)' }
+    ) {
+        $InstallationMode = $mode
+        { Assert-SqlEdition -Edition $edition } | Should -Throw '*does not convert an existing instance*'
+    }
+    It 'selects separate <mode> media for SQL <versionNumber>' -ForEach @(
+        @{ mode = 'Developer'; versionNumber = '2016' },
+        @{ mode = 'Developer'; versionNumber = '2019' },
+        @{ mode = 'Developer'; versionNumber = '2025' },
+        @{ mode = 'Evaluation'; versionNumber = '2016' },
+        @{ mode = 'Evaluation'; versionNumber = '2019' },
+        @{ mode = 'Evaluation'; versionNumber = '2025' }
+    ) {
+        $SqlVersion = $versionNumber
+        $InstallationMode = $mode
+        Invoke-SqlServerSetup -SqlVersionInfo $versions[$SqlVersion]
+        $mediaEdition = if ($mode -eq 'Developer') { 'Developer' } else { 'Evaluation' }
+        $expectedMediaDirectory = if ($mediaEdition -eq 'Developer') { $installDirectory } else { Join-Path $installDirectory 'Evaluation' }
+        $expectedUri = if ($mode -ne 'Developer') {
+            $versions[$SqlVersion].EvaluationBootstrapperUrl
+        } elseif ($SqlVersion -eq '2016') {
+            $versions[$SqlVersion].IsoUrl
+        } else { $versions[$SqlVersion].BootstrapperUrl }
+        Should -Invoke Save-SqlDownload -Exactly -Times 1 -ParameterFilter { $Uri -eq $expectedUri }
+        Should -Invoke Mount-DiskImage -Exactly -Times 1 -ParameterFilter {
+            $ImagePath -eq (Join-Path $expectedMediaDirectory "SQLServer$SqlVersion.iso")
+        }
+        Should -Invoke Invoke-SqlSetupProcess -Exactly -Times 1 -ParameterFilter {
+            $FilePath -eq 'TestDrive:\setup.exe' -and $Arguments -contains "/ConfigurationFile=`"$installDirectory\ConfigurationFile.ini`""
+        }
+        if ($SqlVersion -eq '2016' -and $mode -ne 'Developer') {
+            Should -Invoke Save-SqlDownload -Exactly -Times 1 -ParameterFilter { $Uri -eq $versions['2016'].ServicePackUrl }
+            Should -Invoke Invoke-SqlSetupProcess -Exactly -Times 1 -ParameterFilter {
+                $Arguments -contains '/UpdateEnabled=True' -and $Arguments -contains "/UpdateSource=`"$installDirectory\Evaluation\Updates`""
+            }
+        }
+        Should -Invoke Dismount-DiskImage -Exactly -Times 1
+    }
+    It 'reuses existing Developer media without downloading it again' {
+        $SqlVersion = '2019'
+        Set-Content (Join-Path $installDirectory 'SQLServer2019.iso') 'cached Developer ISO'
+        Invoke-SqlServerSetup -SqlVersionInfo $versions[$SqlVersion]
+        Should -Invoke Save-SqlDownload -Exactly -Times 0
+        Should -Invoke Invoke-SqlSetupProcess -Exactly -Times 0 -ParameterFilter { $FilePath -like '*SSEI-*.exe' }
+    }
+    It 'does not mistake cached Developer media for Evaluation media' {
+        $InstallationMode = 'Evaluation'
+        Set-Content (Join-Path $installDirectory 'SQLServer2019.iso') 'cached Developer ISO'
+        Invoke-SqlServerSetup -SqlVersionInfo $versions[$SqlVersion]
+        Should -Invoke Save-SqlDownload -Exactly -Times 1 -ParameterFilter { $Uri -eq $versions['2019'].EvaluationBootstrapperUrl }
+        Get-Content (Join-Path $installDirectory 'SQLServer2019.iso') | Should -Be 'cached Developer ISO'
+    }
+    It 'wires both options through deployment templates and the bootstrap machine environment' {
+        $mapping = Get-Content (Join-Path $arcboxRoot 'bicep\main.azd.parameters.json') -Raw | ConvertFrom-Json
+        $mapping.parameters.nestedSqlMode.value | Should -Be '${JS_NESTED_SQL_MODE=Developer}'
+        $mapping.parameters.PSObject.Properties.Name | Should -Not -Contain nestedSqlByolEdition
+        foreach ($path in @('bicep\main.azd.bicep', 'bicep\main.bicep')) {
+            $source = Get-Content (Join-Path $arcboxRoot $path) -Raw
+            $source | Should -Match 'nestedSqlMode: nestedSqlMode'
+            $source | Should -Not -Match 'nestedSqlByolEdition|''BYOL'''
+        }
+        $bootstrap = Get-Content (Join-Path $arcboxRoot 'artifacts\Bootstrap.ps1') -Raw
+        $bootstrap | Should -Match ([regex]::Escape("SetEnvironmentVariable('nestedSqlMode', `$nestedSqlMode, [System.EnvironmentVariableTarget]::Machine)"))
+        $bootstrap | Should -Not -Match 'nestedSqlByolEdition|''BYOL'''
+        $client = Get-Content (Join-Path $arcboxRoot 'ARM\clientVm\clientVm.json') -Raw | ConvertFrom-Json
+        $client.parameters.nestedSqlMode.allowedValues | Should -Be @('Developer', 'Evaluation')
+        $client.parameters.PSObject.Properties.Name | Should -Not -Contain nestedSqlByolEdition
+        $hostSource = Get-Content (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1') -Raw
+        ([regex]::Matches($hostSource, '-InstallationMode \$mode')).Count | Should -Be 2
+        $hostSource | Should -Match 'Install-ArcBoxSqlExtension -MachineName \$sqlVmName -LicenseType LicenseOnly'
+        $hostSource | Should -Not -Match 'ByolEdition|sqlGuestLicenseTypes|Installation\.json'
+        $installer | Should -Not -Match 'LicenseType|''Paid''|Installation\.json'
+    }
+    It 'passes the selected installation mode into both initial and post-reboot guest setup' {
+        $hostAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1'), [ref]$null, [ref]$null)
+        $commands = $hostAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-Command'
+        }, $true)
+        $blocks = @($commands.CommandElements | Where-Object {
+            $_ -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+            $_.Extent.Text -like '*InstallNestedSqlServer.ps1*'
+        })
+        $blocks.Count | Should -Be 2
+        $nestedVMArcBoxDir = $TestDrive
+        Set-Content (Join-Path $TestDrive 'InstallNestedSqlServer.ps1') @'
+param($SqlVersion, $InstallationMode)
+[pscustomobject]@{ Version = $SqlVersion; Mode = $InstallationMode }
+'@
+        Mock Remove-Item {}
+        foreach ($block in $blocks) {
+            $text = $block.Extent.Text
+            $guestSetup = [scriptblock]::Create($text.Substring(1, $text.Length - 2).Replace('$Using:nestedVMArcBoxDir', '$nestedVMArcBoxDir'))
+            $result = & $guestSetup '2016' 'Evaluation'
+            $result.Version | Should -Be '2016'
+            $result.Mode | Should -Be 'Evaluation'
+        }
     }
 }
 

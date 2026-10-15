@@ -105,6 +105,30 @@ function Select-ArcBoxFlavor {
     }
 }
 
+function Select-ArcBoxSqlMode {
+    param([bool]$Interactive = (-not [Console]::IsInputRedirected -and [Environment]::UserInteractive))
+
+    if (-not $Interactive -or $env:AZD_NO_PROMPT -eq 'true') {
+        throw "No ITPro SQL installation mode is configured and interactive input is unavailable or disabled. Run 'azd env set JS_NESTED_SQL_MODE <Developer|Evaluation>' before provisioning."
+    }
+
+    Write-Host 'Select the ITPro SQL installation mode (SQL 2016/2019/2025):'
+    Write-Host '  1. Developer  (dev)  - Development and testing'
+    Write-Host '  2. Evaluation (eval) - 180-day Evaluation trial'
+    Write-Host 'SQL 2022 uses JS_SQL_SERVER_EDITION separately. This selection does not enroll ESUs.'
+    while ($true) {
+        $selection = Read-Host 'Select 1-2 or enter dev or eval (Enter or Q to cancel)'
+        if ([string]::IsNullOrWhiteSpace($selection) -or $selection.Trim() -eq 'Q') {
+            throw "SQL installation mode selection cancelled. Run 'azd env set JS_NESTED_SQL_MODE <Developer|Evaluation>' before provisioning."
+        }
+        switch ($selection.Trim()) {
+            { $_ -in @('1', 'dev', 'Developer') } { return 'Developer' }
+            { $_ -in @('2', 'eval', 'Evaluation') } { return 'Evaluation' }
+            default { Write-Warning 'Choose 1 (dev) or 2 (eval).' }
+        }
+    }
+}
+
 function Initialize-ArcBoxDeployment {
     foreach ($command in @('az', 'azd')) {
         if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
@@ -128,6 +152,19 @@ function Initialize-ArcBoxDeployment {
         throw "JS_ARCBOX_FLAVOR must be ITPro, DevOps, or DataOps."
     }
 
+    if ($flavor -eq 'ITPro') {
+        $sqlMode = $env:JS_NESTED_SQL_MODE
+        if ([string]::IsNullOrWhiteSpace($sqlMode)) {
+            $sqlMode = Select-ArcBoxSqlMode
+        }
+        if ($sqlMode -eq 'BYOL') {
+            throw "BYOL is no longer an installation mode. Run 'azd env set JS_NESTED_SQL_MODE Evaluation'; configure Software Assurance licensing separately after manual edition conversion."
+        }
+        if ($sqlMode -cnotin @('Developer', 'Evaluation')) {
+            throw 'JS_NESTED_SQL_MODE must be Developer or Evaluation.'
+        }
+    }
+
     Initialize-ArcBoxPassword
 
     $null = Invoke-ArcBoxAz -Arguments @('account', 'show', '--output', 'json')
@@ -144,6 +181,9 @@ function Initialize-ArcBoxDeployment {
         }
     }
     Set-ArcBoxEnvironmentValue -Name JS_ARCBOX_FLAVOR -Value $flavor
+    if ($flavor -eq 'ITPro') {
+        Set-ArcBoxEnvironmentValue -Name JS_NESTED_SQL_MODE -Value $sqlMode
+    }
 
     $null = Get-ArcBoxTimeoutMinutes
 

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "3065442351347351935"
+      "templateHash": "14573463306528448691"
     }
   },
   "parameters": {
@@ -80,6 +80,17 @@
       ],
       "metadata": {
         "description": "SQL Server edition to deploy. Valid values are: 'Developer', 'Standard', 'Enterprise'"
+      }
+    },
+    "nestedSqlMode": {
+      "type": "string",
+      "defaultValue": "Developer",
+      "allowedValues": [
+        "Developer",
+        "Evaluation"
+      ],
+      "metadata": {
+        "description": "SQL 2016/2019/2025 installation mode. Software Assurance licensing and edition conversion are separate manual steps."
       }
     },
     "githubAccount": {
@@ -1529,6 +1540,9 @@
           "sqlServerEdition": {
             "value": "[parameters('sqlServerEdition')]"
           },
+          "nestedSqlMode": {
+            "value": "[parameters('nestedSqlMode')]"
+          },
           "zones": {
             "value": "[parameters('zones')]"
           },
@@ -1543,7 +1557,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "13437263394593981968"
+              "templateHash": "3140738538828754840"
             }
           },
           "parameters": {
@@ -1725,6 +1739,17 @@
               ],
               "metadata": {
                 "description": "SQL Server edition to deploy. Valid values are: 'Developer', 'Standard', 'Enterprise'"
+              }
+            },
+            "nestedSqlMode": {
+              "type": "string",
+              "defaultValue": "Developer",
+              "allowedValues": [
+                "Developer",
+                "Evaluation"
+              ],
+              "metadata": {
+                "description": "SQL 2016/2019/2025 installation mode. Software Assurance licensing and edition conversion are separate manual steps."
               }
             },
             "deployBastion": {
@@ -1987,7 +2012,7 @@
                   "fileUris": [
                     "[uri(parameters('templateBaseUrl'), 'artifacts/Bootstrap.ps1')]"
                   ],
-                  "commandToExecute": "[format('powershell.exe -ExecutionPolicy Bypass -File Bootstrap.ps1 -adminUsername {0} -tenantId {1} -spnAuthority {2} -subscriptionId {3} -resourceGroup {4} -azdataUsername {5} -acceptEula {6} -registryUsername {7} -arcDcName {8} -azureLocation {9} -mssqlmiName {10} -POSTGRES_NAME {11} -POSTGRES_WORKER_NODE_COUNT {12} -POSTGRES_DATASIZE {13} -POSTGRES_SERVICE_TYPE {14} -stagingStorageAccountName {15} -workspaceName {16} -templateBaseUrl {17} -flavor {18} -k3sArcDataClusterName {19} -k3sArcClusterName {20} -aksArcClusterName {21} -aksdrArcClusterName {22} -githubUser {23} -githubBranch {24} -vmAutologon {25} -rdpPort {26} -addsDomainName {27} {28} -resourceTags {29} -namingPrefix {30} -debugEnabled {31} -sqlServerEdition {32} -autoShutdownEnabled {33}', parameters('windowsAdminUsername'), parameters('tenantId'), parameters('spnAuthority'), subscription().subscriptionId, resourceGroup().name, parameters('azdataUsername'), parameters('acceptEula'), parameters('registryUsername'), parameters('arcDcName'), parameters('location'), parameters('mssqlmiName'), parameters('postgresName'), parameters('postgresWorkerNodeCount'), parameters('postgresDatasize'), parameters('postgresServiceType'), parameters('stagingStorageAccountName'), parameters('workspaceName'), parameters('templateBaseUrl'), parameters('flavor'), parameters('k3sArcDataClusterName'), parameters('k3sArcClusterName'), parameters('aksArcClusterName'), parameters('aksdrArcClusterName'), parameters('githubUser'), parameters('githubBranch'), parameters('vmAutologon'), parameters('rdpPort'), parameters('addsDomainName'), variables('customLocationRPArgument'), parameters('resourceTags'), parameters('namingPrefix'), parameters('debugEnabled'), parameters('sqlServerEdition'), parameters('autoShutdownEnabled'))]"
+                  "commandToExecute": "[format('powershell.exe -ExecutionPolicy Bypass -File Bootstrap.ps1 -adminUsername {0} -tenantId {1} -spnAuthority {2} -subscriptionId {3} -resourceGroup {4} -azdataUsername {5} -acceptEula {6} -registryUsername {7} -arcDcName {8} -azureLocation {9} -mssqlmiName {10} -POSTGRES_NAME {11} -POSTGRES_WORKER_NODE_COUNT {12} -POSTGRES_DATASIZE {13} -POSTGRES_SERVICE_TYPE {14} -stagingStorageAccountName {15} -workspaceName {16} -templateBaseUrl {17} -flavor {18} -k3sArcDataClusterName {19} -k3sArcClusterName {20} -aksArcClusterName {21} -aksdrArcClusterName {22} -githubUser {23} -githubBranch {24} -vmAutologon {25} -rdpPort {26} -addsDomainName {27} {28} -resourceTags {29} -namingPrefix {30} -debugEnabled {31} -sqlServerEdition {32} -nestedSqlMode {33} -autoShutdownEnabled {34}', parameters('windowsAdminUsername'), parameters('tenantId'), parameters('spnAuthority'), subscription().subscriptionId, resourceGroup().name, parameters('azdataUsername'), parameters('acceptEula'), parameters('registryUsername'), parameters('arcDcName'), parameters('location'), parameters('mssqlmiName'), parameters('postgresName'), parameters('postgresWorkerNodeCount'), parameters('postgresDatasize'), parameters('postgresServiceType'), parameters('stagingStorageAccountName'), parameters('workspaceName'), parameters('templateBaseUrl'), parameters('flavor'), parameters('k3sArcDataClusterName'), parameters('k3sArcClusterName'), parameters('aksArcClusterName'), parameters('aksdrArcClusterName'), parameters('githubUser'), parameters('githubBranch'), parameters('vmAutologon'), parameters('rdpPort'), parameters('addsDomainName'), variables('customLocationRPArgument'), parameters('resourceTags'), parameters('namingPrefix'), parameters('debugEnabled'), parameters('sqlServerEdition'), parameters('nestedSqlMode'), parameters('autoShutdownEnabled'))]"
                 }
               },
               "dependsOn": [

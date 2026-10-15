@@ -123,22 +123,27 @@ function Install-ArcBoxSqlExtension {
         throw "Could not list SQL extensions on $MachineName (Azure CLI exit code $LASTEXITCODE)."
     }
     if ($state -eq 'Succeeded') {
-        Write-Host "SQL Server extension already installed on $MachineName."
+        Write-Host "SQL Server extension already installed on $MachineName; preserving its license and settings."
         return
     }
-    $settingsPath = Join-Path $Env:ArcBoxDir "SqlExtension-$MachineName.json"
-    @{
-        LicenseType = $LicenseType
-        SqlManagement = @{ IsEnabled = $true }
-    } | ConvertTo-Json -Depth 3 | Set-Content -Path $settingsPath -Encoding utf8
-    try {
-        # A settings file avoids JSON quote loss through az.cmd on Windows.
-        az connectedmachine extension create --subscription $subscriptionId --machine-name $MachineName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --type 'WindowsAgent.SqlServer' --publisher 'Microsoft.AzureData' --settings "@$settingsPath" --tags $resourceTags --location $azureLocation --only-show-errors --no-wait
-        if ($LASTEXITCODE -ne 0) {
-            throw "SQL extension creation failed on $MachineName (Azure CLI exit code $LASTEXITCODE)."
+    if ($state -in @('Failed', 'Canceled')) {
+        throw "SQL extension on $MachineName entered state '$state'. Repair the existing extension without overwriting its license settings."
+    }
+    if ([string]::IsNullOrWhiteSpace($state)) {
+        $settingsPath = Join-Path $Env:ArcBoxDir "SqlExtension-$MachineName.json"
+        @{
+            LicenseType = $LicenseType
+            SqlManagement = @{ IsEnabled = $true }
+        } | ConvertTo-Json -Depth 3 | Set-Content -Path $settingsPath -Encoding utf8 -ErrorAction Stop
+        try {
+            # A settings file avoids JSON quote loss through az.cmd on Windows.
+            az connectedmachine extension create --subscription $subscriptionId --machine-name $MachineName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --type 'WindowsAgent.SqlServer' --publisher 'Microsoft.AzureData' --settings "@$settingsPath" --tags $resourceTags --location $azureLocation --only-show-errors --no-wait
+            if ($LASTEXITCODE -ne 0) {
+                throw "SQL extension creation failed on $MachineName (Azure CLI exit code $LASTEXITCODE)."
+            }
+        } finally {
+            Remove-Item -LiteralPath $settingsPath -Force
         }
-    } finally {
-        Remove-Item -LiteralPath $settingsPath -Force
     }
 
     $deadline = (Get-Date).AddMinutes(15)
@@ -715,6 +720,7 @@ if ($Env:flavor -ne 'DevOps') {
         Copy-VMFile $Win25Sql25vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -DestinationPath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -CreateFullPath -FileSource Host -Force
 
         Write-Header 'Installing SQL Server on nested Windows VMs'
+        $sqlMode = if ([string]::IsNullOrWhiteSpace($Env:nestedSqlMode)) { 'Developer' } else { $Env:nestedSqlMode }
         foreach ($sqlGuest in @(
             @{ Name = $Win19Sql16vmName; Version = '2016' }
             @{ Name = $Win22Sql19vmName; Version = '2019' }
@@ -725,10 +731,10 @@ if ($Env:flavor -ne 'DevOps') {
             $tags['DeploymentProgress'] = "Installing SQL Server $($sqlGuest.Version) on $($sqlGuest.Name)"
             $null = Set-AzResourceGroup -ResourceGroupName $resourceGroup -Tag $tags -ErrorAction Stop
             Invoke-Command -VMName $sqlGuest.Name -ScriptBlock {
-                param($version)
+                param($version, $mode)
                 $ErrorActionPreference = 'Stop'
-                & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion $version
-            } -ArgumentList $sqlGuest.Version -Credential $winCreds -ErrorAction Stop
+                & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion $version -InstallationMode $mode
+            } -ArgumentList $sqlGuest.Version, $sqlMode -Credential $winCreds -ErrorAction Stop
             $restartRequired = Invoke-Command -VMName $sqlGuest.Name -Credential $winCreds -ErrorAction Stop -ScriptBlock {
                 param($version)
                 Test-Path "$env:ProgramData\ArcBox\SQLServer$version\RestartRequired"
@@ -749,11 +755,11 @@ if ($Env:flavor -ne 'DevOps') {
                 }
                 if (-not $guestReady) { throw "Guest $($sqlGuest.Name) did not become ready after SQL setup restart." }
                 Invoke-Command -VMName $sqlGuest.Name -Credential $winCreds -ErrorAction Stop -ScriptBlock {
-                    param($version)
+                    param($version, $mode)
                     $ErrorActionPreference = 'Stop'
                     Remove-Item "$env:ProgramData\ArcBox\SQLServer$version\RestartRequired" -Force
-                    & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion $version
-                } -ArgumentList $sqlGuest.Version
+                    & "$Using:nestedVMArcBoxDir\InstallNestedSqlServer.ps1" -SqlVersion $version -InstallationMode $mode
+                } -ArgumentList $sqlGuest.Version, $sqlMode
             }
         }
 

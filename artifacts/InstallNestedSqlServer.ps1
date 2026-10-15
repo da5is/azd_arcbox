@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory)]
     [ValidateSet('2016', '2019', '2025')]
-    [string]$SqlVersion
+    [string]$SqlVersion,
+    [ValidateSet('Developer', 'Evaluation')]
+    [string]$InstallationMode = 'Developer'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,18 +14,22 @@ $versions = @{
     '2016' = @{
         MajorVersion = 13
         IsoUrl = 'https://download.microsoft.com/download/f/9/8/f982347c-fee3-4b3e-a8dc-c95383aa3020/sql16_sp3_dlc/en-us/SQLServer2016SP3-FullSlipstream-x64-ENU-DEV.iso'
+        EvaluationBootstrapperUrl = 'https://go.microsoft.com/fwlink/?linkid=799011&clcid=0x409&culture=en-us&country=us'
+        ServicePackUrl = 'https://download.microsoft.com/download/a/7/7/a77b5753-8fe7-4804-bfc5-591d9a626c98/SQLServer2016SP3-KB5003279-x64-ENU.exe'
         BackupUrl = 'https://github.com/microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorksLT2016.bak'
         DatabaseName = 'AdventureWorksLT2016'
     }
     '2019' = @{
         MajorVersion = 15
         BootstrapperUrl = 'https://go.microsoft.com/fwlink/?linkid=866662&clcid=0x409&culture=en-us&country=us'
+        EvaluationBootstrapperUrl = 'https://go.microsoft.com/fwlink/?linkid=866664&clcid=0x409&culture=en-us&country=us'
         BackupUrl = 'https://github.com/microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorksLT2019.bak'
         DatabaseName = 'AdventureWorksLT2019'
     }
     '2025' = @{
         MajorVersion = 17
         BootstrapperUrl = 'https://go.microsoft.com/fwlink/?linkid=2344711&clcid=0x409&culture=en-us&country=us'
+        EvaluationBootstrapperUrl = 'https://go.microsoft.com/fwlink/?linkid=2342429&clcid=0x409&culture=en-us&country=us'
         BackupUrl = 'https://github.com/microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorksLT2025.bak'
         DatabaseName = 'AdventureWorksLT2025'
     }
@@ -31,6 +37,18 @@ $versions = @{
 $version = $versions[$SqlVersion]
 $installDirectory = Join-Path $Env:ProgramData "ArcBox\SQLServer$SqlVersion"
 $null = New-Item -Path $installDirectory -ItemType Directory -Force
+
+function Assert-SqlEdition {
+    param([Parameter(Mandatory)][string]$Edition)
+
+    if ($InstallationMode -eq 'Evaluation' -and $Edition -match '^(Standard|Enterprise) Edition\b') {
+        Write-Output "SQL Server $SqlVersion has been manually converted to '$Edition'; Arc licensing remains separately configured."
+        return
+    }
+    if ($Edition -notlike "*$InstallationMode*") {
+        throw "SQL Server $SqlVersion expects $InstallationMode, found '$Edition'. Changing the deployment option does not convert an existing instance."
+    }
+}
 
 function Save-SqlDownload {
     param([string]$Uri, [string]$Path)
@@ -77,23 +95,28 @@ function Invoke-SqlServerSetup {
         [hashtable]$SqlVersionInfo
     )
 
-    $isoPath = Join-Path $installDirectory "SQLServer$SqlVersion.iso"
-    if ($SqlVersion -eq '2016') {
+    $mediaEdition = if ($InstallationMode -eq 'Developer') { 'Developer' } else { 'Evaluation' }
+    $mediaDirectory = if ($mediaEdition -eq 'Developer') { $installDirectory } else { Join-Path $installDirectory 'Evaluation' }
+    $null = New-Item -Path $mediaDirectory -ItemType Directory -Force
+    $isoPath = Join-Path $mediaDirectory "SQLServer$SqlVersion.iso"
+    if ($SqlVersion -eq '2016' -and $InstallationMode -eq 'Developer') {
         Save-SqlDownload -Uri $SqlVersionInfo.IsoUrl -Path $isoPath
     } elseif (-not (Test-Path $isoPath)) {
-        $bootstrapper = Join-Path $installDirectory "SQLServer$SqlVersion-SSEI-Dev.exe"
-        Save-SqlDownload -Uri $SqlVersionInfo.BootstrapperUrl -Path $bootstrapper
+        $bootstrapperName = if ($mediaEdition -eq 'Developer') { "SQLServer$SqlVersion-SSEI-Dev.exe" } else { "SQLServer$SqlVersion-SSEI-Eval.exe" }
+        $bootstrapper = Join-Path $mediaDirectory $bootstrapperName
+        $bootstrapperUrl = if ($mediaEdition -eq 'Developer') { $SqlVersionInfo.BootstrapperUrl } else { $SqlVersionInfo.EvaluationBootstrapperUrl }
+        Save-SqlDownload -Uri $bootstrapperUrl -Path $bootstrapper
 
         $downloadArguments = @(
             '/Action=Download'
             '/MediaType=ISO'
-            "/MediaPath=`"$installDirectory`""
+            "/MediaPath=`"$mediaDirectory`""
             '/Quiet'
             '/Language=en-US'
         )
         Invoke-SqlSetupProcess -FilePath $bootstrapper -Arguments $downloadArguments
 
-        $downloadedIso = Get-ChildItem -Path $installDirectory -Filter '*.iso' | Select-Object -First 1
+        $downloadedIso = Get-ChildItem -Path $mediaDirectory -Filter '*.iso' | Select-Object -First 1
         if ($null -eq $downloadedIso) {
             throw "The SQL Server $SqlVersion download tool completed without creating an ISO."
         }
@@ -134,6 +157,13 @@ FILESTREAMSHARENAME="MSSQLSERVER"
             "/ConfigurationFile=`"$configurationPath`""
             '/IACCEPTSQLSERVERLICENSETERMS'
         )
+        if ($SqlVersion -eq '2016' -and $mediaEdition -eq 'Evaluation') {
+            # Evaluation media can be SP2; integrate SP3 rather than losing patch-level coverage.
+            $updateDirectory = Join-Path $mediaDirectory 'Updates'
+            $null = New-Item -Path $updateDirectory -ItemType Directory -Force
+            Save-SqlDownload -Uri $SqlVersionInfo.ServicePackUrl -Path (Join-Path $updateDirectory 'SQLServer2016SP3-KB5003279-x64-ENU.exe')
+            $setupArguments += '/UpdateEnabled=True', "/UpdateSource=`"$updateDirectory`""
+        }
         Invoke-SqlSetupProcess -FilePath $setupPath -Arguments $setupArguments
     } finally {
         Dismount-DiskImage -ImagePath $isoPath
@@ -142,7 +172,7 @@ FILESTREAMSHARENAME="MSSQLSERVER"
 
 $sqlService = Get-Service -Name MSSQLSERVER -ErrorAction SilentlyContinue
 if ($null -eq $sqlService) {
-    Write-Output "Installing SQL Server $SqlVersion Developer Edition."
+    Write-Output "Installing SQL Server $SqlVersion (mode: $InstallationMode)."
     Invoke-SqlServerSetup -SqlVersionInfo $version
 } else {
     Write-Output "SQL Server service already exists; verifying SQL Server $SqlVersion."
@@ -190,6 +220,8 @@ $PSDefaultParameterValues['Invoke-Sqlcmd:AbortOnError'] = $true
 $serverInfo = Invoke-Sqlcmd -ServerInstance '.' -Query @'
 SELECT
     CAST(SERVERPROPERTY('ProductMajorVersion') AS int) AS MajorVersion,
+    CAST(SERVERPROPERTY('Edition') AS nvarchar(128)) AS Edition,
+    CAST(SERVERPROPERTY('ProductLevel') AS nvarchar(128)) AS ProductLevel,
     CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(4000)) AS DataPath,
     CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS nvarchar(4000)) AS LogPath,
     CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS nvarchar(4000)) AS BackupPath;
@@ -197,6 +229,10 @@ SELECT
 
 if ([int]$serverInfo.MajorVersion -ne $version.MajorVersion) {
     throw "Expected SQL Server $SqlVersion (major version $($version.MajorVersion)), found major version $($serverInfo.MajorVersion)."
+}
+Assert-SqlEdition -Edition $serverInfo.Edition
+if ($SqlVersion -eq '2016' -and $serverInfo.ProductLevel -ne 'SP3') {
+    throw "SQL Server 2016 requires SP3, found '$($serverInfo.ProductLevel)'. Apply SP3 before continuing."
 }
 
 $dataPath = $serverInfo.DataPath
@@ -300,4 +336,4 @@ if ([int]$verification.AdventureWorksDatabaseId -le 0 -or [int]$verification.Arc
     throw "SQL Server $SqlVersion installation completed without both sample databases."
 }
 
-Write-Output "SQL Server $SqlVersion is running with $($version.DatabaseName) and ArchiveDB."
+Write-Output "SQL Server $SqlVersion ($($serverInfo.Edition)) is running with $($version.DatabaseName) and ArchiveDB. Edition conversion, Software Assurance licensing, and ESU enrollment remain manual."

@@ -56,6 +56,7 @@ Describe "Nested SQL Server on <Name>" -ForEach $SqlVMs {
             Invoke-Sqlcmd -ServerInstance '.' -Query @"
 SELECT
     CAST(SERVERPROPERTY('ProductMajorVersion') AS int) AS MajorVersion,
+    CAST(SERVERPROPERTY('Edition') AS nvarchar(128)) AS Edition,
     ISNULL(DB_ID(N'$databaseName'), 0) AS SampleDatabaseId,
     ISNULL(DB_ID(N'ArchiveDB'), 0) AS ArchiveDatabaseId;
 "@ -TrustServerCertificate
@@ -64,5 +65,12 @@ SELECT
         $result.MajorVersion | Should -Be $sqlVM.MajorVersion
         $result.SampleDatabaseId | Should -BeGreaterThan 0
         $result.ArchiveDatabaseId | Should -BeGreaterThan 0
+        $mode = if ([string]::IsNullOrWhiteSpace($env:nestedSqlMode)) { 'Developer' } else { $env:nestedSqlMode }
+        if ($mode -eq 'Evaluation') {
+            $result.Edition | Should -Match 'Evaluation|^(Standard|Enterprise) Edition\b'
+            $result.Edition | Should -Not -Match 'Developer'
+        } else {
+            $result.Edition | Should -BeLike "*$mode*"
+        }
     }
 }

@@ -48,6 +48,13 @@ param githubUser string = 'Azure'
 ])
 param sqlServerEdition string = 'Developer'
 
+@description('SQL 2016/2019/2025 installation mode. Software Assurance licensing and edition conversion are separate manual steps.')
+@allowed([
+  'Developer'
+  'Evaluation'
+])
+param nestedSqlMode string = 'Developer'
+
 param autoShutdownEnabled bool = true
 param autoShutdownTime string = '1800'
 param autoShutdownTimezone string = 'UTC'
@@ -87,6 +94,7 @@ module arcbox 'main.bicep' = {
     githubBranch: githubBranch
     githubUser: githubUser
     sqlServerEdition: sqlServerEdition
+    nestedSqlMode: nestedSqlMode
     vmAutologon: true
     guid: take(uniqueString(subscription().id, envName), 4)
     resourceTags: {

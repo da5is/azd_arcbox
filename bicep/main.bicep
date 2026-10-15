@@ -39,6 +39,13 @@ param flavor string = 'ITPro'
 ])
 param sqlServerEdition string = 'Developer'
 
+@description('SQL 2016/2019/2025 installation mode. Software Assurance licensing and edition conversion are separate manual steps.')
+@allowed([
+  'Developer'
+  'Evaluation'
+])
+param nestedSqlMode string = 'Developer'
+
 @description('Target GitHub account')
 param githubAccount string = 'da5is'
 
@@ -213,6 +220,7 @@ module clientVmDeployment 'clientVm/clientVm.bicep' = {
     autoShutdownTimezone: autoShutdownTimezone
     autoShutdownEmailRecipient: empty(autoShutdownEmailRecipient) ? null : autoShutdownEmailRecipient
     sqlServerEdition: sqlServerEdition
+    nestedSqlMode: nestedSqlMode
     zones: zones
     enableAzureSpotPricing: enableAzureSpotPricing
   }

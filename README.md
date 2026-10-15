@@ -45,13 +45,25 @@ Select an ArcBox scenario:
 
 Enter a number or flavor name. The hook saves the selection as `JS_ARCBOX_FLAVOR` in the current environment after checking for an existing lab, so later runs skip the menu. Invalid choices prompt again; Enter or Q cancels before any Azure operations. `azd init` itself does not prompt for a flavor.
 
-To skip the menu, set `JS_ARCBOX_FLAVOR` explicitly as in the examples below. Unattended runs must set a flavor before provisioning; without terminal input, or when `AZD_NO_PROMPT=true`, the hook fails with configuration guidance rather than silently defaulting to ITPro. Do not rely on `azd --no-prompt` alone to disable prompts inside custom scripts.
+For ITPro, the hook also prompts when `JS_NESTED_SQL_MODE` has not been configured:
+
+```text
+Select the ITPro SQL installation mode (SQL 2016/2019/2025):
+  1. Developer  (dev)  - Development and testing
+  2. Evaluation (eval) - 180-day Evaluation trial
+```
+
+Enter 1 or 2, `dev`, `eval`, or a full mode name (case-insensitive). Invalid choices prompt again; Enter or Q cancels before Azure operations. The hook saves the canonical selection as `JS_NESTED_SQL_MODE` after checking resource-group ownership and flavor, and later runs skip this menu. DevOps and DataOps do not show the SQL menu. SQL version coverage stays unchanged; the prebuilt SQL 2022 guest still uses its separate `JS_SQL_SERVER_EDITION` setting. Software Assurance licensing is configured separately after manual licensed edition conversion, not through an installation menu choice.
+
+To skip the menus, set `JS_ARCBOX_FLAVOR` and, for ITPro, `JS_NESTED_SQL_MODE` explicitly. Unattended runs must configure these selections before provisioning; without terminal input, or when `AZD_NO_PROMPT=true`, the hook fails with configuration guidance instead of silently selecting a flavor or SQL mode. Do not rely on `azd --no-prompt` alone to disable prompts inside custom scripts.
 
 ### ITPro
 
 ```powershell
 azd env new arcbox-itpro --subscription <subscription-id> --location eastus2
 azd env set JS_ARCBOX_FLAVOR ITPro
+# Optional interactively; required for unattended ITPro provisioning:
+# azd env set JS_NESTED_SQL_MODE Evaluation
 azd up
 ```
 
@@ -102,13 +114,13 @@ The existing ArcBox deployment checks define readiness; this wrapper does not ad
 
 After deployment, use the printed resource-group link to access `ArcBox-Client` through RDP or Bastion. DataOps uses the domain-qualified username printed by the hook. Retrieve the administrator password from the resource group's Key Vault.
 
-The ITPro flavor includes four SQL guests: `win22sql22`, the prebuilt SQL Server 2022 VM, `win19sql16` (Windows Server 2019 with SQL Server 2016 SP3 Developer Edition), `win22sql19` (Windows Server 2022 with SQL Server 2019 Developer Edition), and `win25sql25` (Windows Server 2025 with SQL Server 2025 Enterprise Developer Edition). The three additional Windows guests are Arc-enabled and include version-matched AdventureWorksLT databases and the FILESTREAM `ArchiveDB` sample. Developer Edition is for development and testing; SQL Server 2016 must be upgraded to Standard or Enterprise and licensed before it can subscribe to ESUs. Microsoft lists SQL Server 2016 extended support as ending July 14, 2026, with ESU coverage beginning after that date. SQL Server 2019 remains in extended support until January 9, 2030.
+The ITPro flavor includes four SQL guests: `win22sql22`, the prebuilt SQL Server 2022 VM, `win19sql16` (Windows Server 2019 with SQL Server 2016 SP3), `win22sql19` (Windows Server 2022 with SQL Server 2019), and `win25sql25` (Windows Server 2025 with SQL Server 2025). The three additional Windows guests are Arc-enabled and include version-matched AdventureWorksLT databases and the FILESTREAM `ArchiveDB` sample. The azd hook prompts for Developer or Evaluation; direct template deployments default to Developer. Both modes retain the same SQL versions, guests, and samples.
 
 ITPro allocates 6 GB to the prebuilt SQL guest, 4 GB to each additional Windows guest, and 2 GB to each Ubuntu guest (22 GB total), leaving headroom for the client on a 32-GB VM. If setup remains at `Downloading and configuring nested VMs`, check `Get-VM` and Hyper-V startup errors: a powered-off Ubuntu guest can leave setup waiting for its heartbeat.
 
 Additional SQL installations report a separate resource-group progress stage for each version. Artifact downloads and installer processes have 60-minute limits; database restores have a 30-minute limit. Failed downloads are not reused as valid media. SQL extension creation errors, failed provisioning, or a 15-minute extension wait timeout stop setup instead of reporting success. Inspect SQL setup logs under `C:\Program Files\Microsoft SQL Server\<version>\Setup Bootstrap\Log` inside the affected guest if installation fails.
 
-SQL extension polling tolerates an initially absent extension after asynchronous creation and skips an already successful extension. SQL setup reboot requests return control to the host, which restarts the guest and resumes database provisioning. Terminating setup errors set `DeploymentProgress=Failed` so the local waiter stops promptly. Recovering a stopped client requires restarting VM-side setup, not just the `postprovision` waiter; preserve existing SSH keys and do not start a second provisioning worker.
+SQL extension polling tolerates an initially absent extension after asynchronous creation, skips an already successful extension, and waits for an existing pending extension without overwriting its settings. A failed existing extension must be repaired explicitly rather than recreated with default licensing. SQL setup reboot requests return control to the host, which restarts the guest and resumes database provisioning. Terminating setup errors set `DeploymentProgress=Failed` so the local waiter stops promptly. Recovering a stopped client requires restarting VM-side setup, not just the `postprovision` waiter; preserve existing SSH keys and do not start a second provisioning worker.
 
 Retries reuse existing guest VHDs and download only missing disks through temporary staging files; paths still attached to a VM are not replaced. Linux Arc onboarding stops on command failures and reuses an existing connection only when it belongs to the requested subscription and resource group.
 
@@ -125,6 +137,48 @@ Set a longer wait before resuming if needed:
 ```powershell
 azd env set JS_ARCBOX_TIMEOUT_MINUTES 720 --environment arcbox-dataops
 ```
+
+### SQL installation modes and Software Assurance
+
+Select the mode from the first ITPro provisioning menu, or configure it **before creating a new ITPro lab**. For Evaluation on SQL 2016/2019/2025:
+
+```powershell
+azd env set JS_NESTED_SQL_MODE Evaluation
+```
+
+`JS_NESTED_SQL_MODE` controls only SQL 2016/2019/2025. `JS_SQL_SERVER_EDITION` still controls only the prebuilt SQL 2022 guest and accepts `Developer`, `Standard`, or `Enterprise`; that selector does not offer Evaluation.
+
+| Mode | Initial SQL 2016/2019/2025 installation | Initial Arc SQL extension license type |
+| --- | --- | --- |
+| `Developer` (template default) | Developer (Enterprise Developer for 2025); dev/test only | `LicenseOnly` |
+| `Evaluation` | Enterprise Evaluation; 180-day trial, evaluation use only | `LicenseOnly` |
+
+### Apply your own license with Software Assurance after conversion
+
+Choose **Evaluation** if you intend to convert these installations to licensed Standard or Enterprise later. There is no separate BYOL installation mode: licensing is independent of the installation choice. Evaluation does **not** supply a licensed edition or product key, extend the 180-day trial, or confer production license rights.
+
+On each guest, use version-matched licensed media and SQL Server Setup's **Maintenance > Edition Upgrade** workflow to convert Evaluation to Standard or Enterprise. Keep product keys out of repository files, deployment parameters, and transcripts. After conversion and any required restart, verify the actual edition and SQL version **inside the converted guest**:
+
+```powershell
+Import-Module SqlServer -ErrorAction Stop
+$instance = Invoke-Sqlcmd -ServerInstance '.' -Query "SELECT CAST(SERVERPROPERTY('Edition') AS nvarchar(128)) AS Edition, CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(128)) AS ProductVersion;" -TrustServerCertificate -ErrorAction Stop
+if ($instance.Edition -notmatch '^(Standard|Enterprise) Edition\b') {
+    throw 'Expected a converted Standard or Enterprise edition, not Evaluation or Developer.'
+}
+$instance
+```
+
+Confirm the version is still the expected SQL 2016, 2019, or 2025. Then, if you have qualifying licenses with active Software Assurance, manually set that machine's **SQL Server Configuration > License type > License with Software Assurance** in Azure Arc. An installed Standard/Enterprise edition alone does not prove SA entitlement. Do not rerun the provisioning worker solely to change licensing.
+
+Provisioning retries in Evaluation mode accept manually converted Standard/Enterprise instances and reuse their databases. Existing SQL extension settings, including manually configured SA licensing and ESUs, are preserved; setup does not infer SA, automatically change the license type, or perform edition conversion. Changing the installation mode does not convert an incompatible existing instance. A successful Evaluation deployment means the trial lab is operational, **not** that licensed conversion or ESU enrollment has completed.
+
+If an environment used the former `JS_NESTED_SQL_MODE=BYOL` option, change it to `Evaluation` before provisioning. The former `JS_NESTED_SQL_BYOL_EDITION` setting is no longer used.
+
+`Paid` is Arc's value for **BYOL with Software Assurance**, not SQL pay-as-you-go (`PAYG`). Select it only when you have qualifying Standard/Enterprise licenses with active SA or a qualifying SQL subscription. The existing prebuilt SQL 2022 guest retains its previous Arc configuration.
+
+**ESUs remain opt-in and manual:** this project does not subscribe machines to ESUs or enable SQL PAYG. SQL Server 2016 reached the end of extended support on July 14, 2026; SQL 2019/2022/2025 are retained for version coverage, not current ESU eligibility. Production ESU enrollment requires an eligible edition and qualifying SA/subscription or PAYG, and ESU charges can apply separately from your existing SQL license. Evaluation alone is not a production ESU entitlement. Microsoft's current guidance also permits Developer-edition ESUs for qualifying nonproduction environments associated with production ESU subscriptions; the previous blanket requirement to convert every Developer instance was too restrictive. Review [Arc ESU eligibility and nonproduction benefits](https://learn.microsoft.com/sql/sql-server/azure-arc/extended-security-updates) and [Arc license types](https://learn.microsoft.com/sql/sql-server/azure-arc/manage-license-billing#license-types) before enrolling.
+
+Evaluation media selection, converted-edition validation, and preservation of existing extension configuration have local regression coverage. This does not establish a clean deployed Evaluation run, licensed conversion, or successful ESU enrollment.
 
 ### Recover from a failed Bootstrap extension
 
@@ -152,6 +206,7 @@ Set overrides with `azd env set <name> <value>` before `azd up`.
 | `JS_GITHUB_BRANCH` | `main` | Published automation branch and DevOps sample-app branch |
 | `JS_GITHUB_USER` | `Azure` | Owner of the `jumpstart-apps` repository used for DevOps GitOps |
 | `JS_SQL_SERVER_EDITION` | `Developer` | Edition of the prebuilt nested SQL Server 2022 VM; also accepts `Standard` or `Enterprise` |
+| `JS_NESTED_SQL_MODE` | Prompt on first ITPro provisioning; template default `Developer` | SQL 2016/2019/2025 mode: `Developer` or `Evaluation`; saved per environment. Set explicitly for unattended ITPro runs. Edition conversion, Software Assurance licensing, and ESU enrollment are separate manual steps. |
 | `JS_AUTO_SHUTDOWN_ENABLED` | `true` | Enable client VM auto-shutdown after setup |
 | `JS_AUTO_SHUTDOWN_TIME` | `1800` | Client shutdown time in HHmm format |
 | `JS_AUTO_SHUTDOWN_TIMEZONE` | `UTC` | Shutdown schedule timezone |

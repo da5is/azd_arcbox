@@ -44,6 +44,9 @@
     "sqlServerEdition": {
       "value": "${JS_SQL_SERVER_EDITION=Developer}"
     },
+    "nestedSqlMode": {
+      "value": "${JS_NESTED_SQL_MODE=Developer}"
+    },
     "autoShutdownEnabled": {
       "value": "${JS_AUTO_SHUTDOWN_ENABLED=true}"
     },

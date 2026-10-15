@@ -34,6 +34,8 @@ param (
     [string]$namingPrefix,
     [string]$debugEnabled,
     [string]$sqlServerEdition,
+    [ValidateSet('Developer', 'Evaluation')]
+    [string]$nestedSqlMode = 'Developer',
     [string]$autoShutdownEnabled
 )
 
@@ -69,6 +71,7 @@ param (
 [System.Environment]::SetEnvironmentVariable('namingPrefix', $namingPrefix, [System.EnvironmentVariableTarget]::Machine)
 [System.Environment]::SetEnvironmentVariable('ArcBoxDir', "C:\ArcBox", [System.EnvironmentVariableTarget]::Machine)
 [System.Environment]::SetEnvironmentVariable('sqlServerEdition', $sqlServerEdition, [System.EnvironmentVariableTarget]::Machine)
+[System.Environment]::SetEnvironmentVariable('nestedSqlMode', $nestedSqlMode, [System.EnvironmentVariableTarget]::Machine)
 [System.Environment]::SetEnvironmentVariable('autoShutdownEnabled', $autoShutdownEnabled, [System.EnvironmentVariableTarget]::Machine)
 
 if ($debugEnabled -eq "true") {
