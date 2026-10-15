@@ -148,6 +148,10 @@ azd env set JS_NESTED_SQL_MODE Evaluation
 
 `JS_NESTED_SQL_MODE` controls only SQL 2016/2019/2025. `JS_SQL_SERVER_EDITION` still controls only the prebuilt SQL 2022 guest and accepts `Developer`, `Standard`, or `Enterprise`; that selector does not offer Evaluation.
 
+**Publish or select the matching artifact branch before deploying Evaluation.** Running a feature-branch checkout does not change the default `JS_GITHUB_BRANCH=main` used for VM downloads. The Evaluation preprovision check compares the published Bootstrap, logon script, SQL installer, and ITPro deployed checks against the local checkout (ignoring CRLF/LF differences), and stops before Azure operations if they differ or cannot be fetched. Set `JS_GITHUB_BRANCH` to the branch where those scripts have been published, or publish them to the configured branch first. The check verifies the current published content; do not change that branch while provisioning is in progress.
+
+If a lab installed Developer despite an Evaluation selection, inspect both the deployed `nestedSqlMode` parameter and the artifact `githubBranch`: older published scripts can ignore a newer local template's input and their older checks can still report success. Correcting the source branch does **not** change existing guest editions or replace scripts already downloaded. Do not rerun Bootstrap to repair this; it performs initial disk/setup operations. Recreating affected SQL guests or rebuilding the lab requires a separate, explicitly approved recovery plan; manual licensed conversion is another option when entitled.
+
 | Mode | Initial SQL 2016/2019/2025 installation | Initial Arc SQL extension license type |
 | --- | --- | --- |
 | `Developer` (template default) | Developer (Enterprise Developer for 2025); dev/test only | `LicenseOnly` |

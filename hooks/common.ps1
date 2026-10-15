@@ -129,6 +129,31 @@ function Select-ArcBoxSqlMode {
     }
 }
 
+function Assert-ArcBoxSqlArtifacts {
+    $account = if ([string]::IsNullOrWhiteSpace($env:JS_GITHUB_ACCOUNT)) { 'da5is' } else { $env:JS_GITHUB_ACCOUNT }
+    $branch = if ([string]::IsNullOrWhiteSpace($env:JS_GITHUB_BRANCH)) { 'main' } else { $env:JS_GITHUB_BRANCH }
+    $baseUrl = "https://raw.githubusercontent.com/$account/azd_arcbox/$branch"
+    $projectRoot = Split-Path $PSScriptRoot -Parent
+    foreach ($artifact in @(
+        'artifacts\Bootstrap.ps1',
+        'artifacts\ArcServersLogonScript.ps1',
+        'artifacts\InstallNestedSqlServer.ps1',
+        'artifacts\tests\itpro.tests.ps1'
+    )) {
+        $url = "$baseUrl/$($artifact.Replace('\', '/'))"
+        try {
+            $published = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        } catch {
+            throw "Cannot verify Evaluation artifacts at '$url': $($_.Exception.Message). Publish the matching scripts and set JS_GITHUB_ACCOUNT/JS_GITHUB_BRANCH to that published source before provisioning."
+        }
+        $localSource = [IO.File]::ReadAllText((Join-Path $projectRoot $artifact)).Replace("`r`n", "`n")
+        $publishedSource = ([string]$published.Content).Replace("`r`n", "`n")
+        if ($localSource -cne $publishedSource) {
+            throw "Evaluation artifact '$artifact' at '$baseUrl' does not match this checkout. Local menus and templates do not update downloaded VM scripts. Publish the matching scripts, or set JS_GITHUB_BRANCH to their published branch before provisioning. Existing Developer instances are not converted by changing this setting."
+        }
+    }
+}
+
 function Initialize-ArcBoxDeployment {
     foreach ($command in @('az', 'azd')) {
         if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
@@ -162,6 +187,9 @@ function Initialize-ArcBoxDeployment {
         }
         if ($sqlMode -cnotin @('Developer', 'Evaluation')) {
             throw 'JS_NESTED_SQL_MODE must be Developer or Evaluation.'
+        }
+        if ($sqlMode -eq 'Evaluation') {
+            Assert-ArcBoxSqlArtifacts
         }
     }
 

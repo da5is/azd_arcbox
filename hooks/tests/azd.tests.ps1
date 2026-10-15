@@ -20,7 +20,8 @@ BeforeAll {
     $environmentNames = @(
         'AZURE_ENV_NAME', 'AZURE_SUBSCRIPTION_ID', 'AZURE_LOCATION', 'AZURE_RESOURCE_GROUP',
         'JS_ARCBOX_FLAVOR', 'JS_ARCBOX_TIMEOUT_MINUTES', 'JS_SSH_PUBLIC_KEY', 'JS_CUSTOM_LOCATION_RP_ID',
-        'AZD_NO_PROMPT', 'JS_ARCBOX_PASSWORD', 'JS_NESTED_SQL_MODE'
+        'AZD_NO_PROMPT', 'JS_ARCBOX_PASSWORD', 'JS_NESTED_SQL_MODE',
+        'JS_GITHUB_ACCOUNT', 'JS_GITHUB_BRANCH'
     )
     function Initialize-TestEnvironment {
         $script:savedEnvironment = @{}
@@ -185,6 +186,59 @@ Describe 'ArcBox SQL mode selection' {
     }
 }
 
+Describe 'ArcBox Evaluation artifact preflight' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+    }
+    BeforeEach {
+        Initialize-TestEnvironment
+        $script:artifactRequests = [System.Collections.Generic.List[string]]::new()
+        Mock Invoke-WebRequest {
+            $script:artifactRequests.Add($Uri)
+            $artifactPath = ([uri]$Uri).AbsolutePath -replace '^.*?/artifacts/', 'artifacts/'
+            [pscustomobject]@{ Content = [IO.File]::ReadAllText((Join-Path $arcboxRoot $artifactPath)) }
+        }
+    }
+    AfterEach { Restore-TestEnvironment }
+
+    It 'accepts matching published scripts and deployed checks' {
+        Assert-ArcBoxSqlArtifacts
+        $script:artifactRequests.Count | Should -Be 4
+        $script:artifactRequests[0] | Should -Be 'https://raw.githubusercontent.com/da5is/azd_arcbox/main/artifacts/Bootstrap.ps1'
+        Should -Invoke Invoke-WebRequest -Exactly -Times 4 -ParameterFilter { $TimeoutSec -eq 30 -and $ErrorAction -eq 'Stop' }
+    }
+    It 'uses the configured public account and branch' {
+        $env:JS_GITHUB_ACCOUNT = 'test-owner'
+        $env:JS_GITHUB_BRANCH = 'feature/sql-eval'
+        Assert-ArcBoxSqlArtifacts
+        $script:artifactRequests[0] | Should -Be 'https://raw.githubusercontent.com/test-owner/azd_arcbox/feature/sql-eval/artifacts/Bootstrap.ps1'
+    }
+    It 'ignores only Windows versus Unix line-ending differences' {
+        Mock Invoke-WebRequest {
+            $artifactPath = ([uri]$Uri).AbsolutePath -replace '^.*?/artifacts/', 'artifacts/'
+            $source = [IO.File]::ReadAllText((Join-Path $arcboxRoot $artifactPath)).Replace("`r`n", "`n").Replace("`n", "`r`n")
+            [pscustomobject]@{ Content = $source }
+        }
+        { Assert-ArcBoxSqlArtifacts } | Should -Not -Throw
+    }
+    It 'rejects stale <artifact> with actionable publishing guidance' -ForEach @(
+        @{ artifact = 'Bootstrap.ps1' },
+        @{ artifact = 'ArcServersLogonScript.ps1' },
+        @{ artifact = 'InstallNestedSqlServer.ps1' },
+        @{ artifact = 'itpro.tests.ps1' }
+    ) {
+        $script:staleArtifact = $artifact
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = 'old Developer-only automation' } } -ParameterFilter {
+            $Uri.AbsolutePath.EndsWith("/$script:staleArtifact")
+        }
+        { Assert-ArcBoxSqlArtifacts } | Should -Throw '*does not match this checkout*set JS_GITHUB_BRANCH*'
+    }
+    It 'does not ignore unreachable or unpublished artifact URLs' {
+        Mock Invoke-WebRequest { throw '404 Not Found' }
+        { Assert-ArcBoxSqlArtifacts } | Should -Throw '*Cannot verify Evaluation artifacts*404 Not Found*Publish*'
+    }
+}
+
 Describe 'ArcBox shared password configuration' {
     BeforeEach {
         Initialize-TestEnvironment
@@ -322,6 +376,7 @@ Describe 'ArcBox prerequisites' {
         Mock Get-Command { [pscustomobject]@{ Name = $Name } }
         Mock Select-ArcBoxFlavor { throw 'Unexpected flavor selection.' }
         Mock Select-ArcBoxSqlMode { throw 'Unexpected SQL mode selection.' }
+        Mock Assert-ArcBoxSqlArtifacts {}
         Mock Read-Host { throw 'Unexpected interactive prompt.' }
         Mock Set-ArcBoxEnvironmentValue { Set-Item -Path "Env:$Name" -Value $Value }
         Mock Invoke-ArcBoxAz {
@@ -423,6 +478,14 @@ Describe 'ArcBox prerequisites' {
         $env:JS_NESTED_SQL_MODE | Should -Be $mode
         Should -Invoke Select-ArcBoxSqlMode -Times 0
         Should -Invoke Read-Host -Times 0
+        Should -Invoke Assert-ArcBoxSqlArtifacts -Exactly -Times $(if ($mode -eq 'Evaluation') { 1 } else { 0 })
+    }
+    It 'stops before Azure operations or persistence when Evaluation artifacts are stale' {
+        $env:JS_NESTED_SQL_MODE = 'Evaluation'
+        Mock Assert-ArcBoxSqlArtifacts { throw 'Evaluation artifact does not match this checkout.' }
+        { Initialize-ArcBoxDeployment } | Should -Throw '*does not match this checkout*'
+        Should -Invoke Invoke-ArcBoxAz -Times 0
+        Should -Invoke Set-ArcBoxEnvironmentValue -Times 0
     }
     It 'skips SQL selection and persistence for <flavor>' -ForEach @(
         @{ flavor = 'DevOps' }, @{ flavor = 'DataOps' }
