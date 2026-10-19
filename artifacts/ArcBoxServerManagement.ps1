@@ -50,13 +50,24 @@ function Set-ArcBoxWindowsActivation {
             Where-Object { $_.LicenseStatus -eq 1 -and $_.Description -like '*VOLUME_KMSCLIENT*' -and $_.PartialProductKey -eq $Key.Substring($Key.Length - 5) })
         if ($licensed.Count -gt 0) { return }
 
-        foreach ($arguments in @(@('-ipk', $Key), @('-skms', 'kms.core.windows.net'), @('-ato'))) {
+        foreach ($arguments in @(@('-ipk', $Key), @('-skms', 'kms.core.windows.net'))) {
             & cscript.exe //NoLogo "$env:windir\System32\slmgr.vbs" @arguments | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Windows activation command failed (exit code $LASTEXITCODE)." }
+            if ($LASTEXITCODE -ne 0) { throw "Windows activation command '$($arguments[0])' failed (exit code $LASTEXITCODE)." }
         }
-        $licensed = @(Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='$windowsApplication'" |
-            Where-Object { $_.LicenseStatus -eq 1 -and $_.Description -like '*VOLUME_KMSCLIENT*' -and $_.PartialProductKey -eq $Key.Substring($Key.Length - 5) })
-        if ($licensed.Count -eq 0) { throw 'Windows did not report an activated KMS client license.' }
+        $deadline = (Get-Date).AddMinutes(5)
+        do {
+            & cscript.exe //NoLogo "$env:windir\System32\slmgr.vbs" -ato | Out-Null
+            $activationExitCode = $LASTEXITCODE
+            $licensed = @(Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='$windowsApplication'" |
+                Where-Object { $_.LicenseStatus -eq 1 -and $_.Description -like '*VOLUME_KMSCLIENT*' -and $_.PartialProductKey -eq $Key.Substring($Key.Length - 5) })
+            if ($licensed.Count -gt 0) { return }
+            if ($activationExitCode -ne 0 -and $activationExitCode -ne -1073418124) {
+                throw "Windows activation command '-ato' failed (exit code $activationExitCode)."
+            }
+            Write-Warning "Waiting for Windows KMS activation (last exit code $activationExitCode)."
+            Start-Sleep -Seconds 15
+        } while ((Get-Date) -lt $deadline)
+        throw 'Windows did not report an activated KMS client license within the activation timeout.'
     }
 }
 

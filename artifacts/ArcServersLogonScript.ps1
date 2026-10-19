@@ -367,9 +367,6 @@ if ($Env:flavor -ne 'DevOps') {
     # Restarting Windows VM Network Adapters
     Write-Host 'Restarting Network Adapters'
     $winCreds = Set-ArcBoxWindowsGuestPassword -VMName $SQLvmName -Password $nestedGuestPassword
-    if ($env:flavor -eq 'ITPro') {
-        Set-ArcBoxWindowsActivation -VMName $SQLvmName -Credential $winCreds
-    }
     Start-Sleep -Seconds 5
     Invoke-Command -VMName $SQLvmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
     Start-Sleep -Seconds 20
@@ -394,6 +391,10 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Host 'VM has rebooted successfully!'
+    }
+
+    if ($env:flavor -eq 'ITPro') {
+        Set-ArcBoxWindowsActivation -VMName $SQLvmName -Credential $winCreds
     }
 
     # Enable Windows Firewall rule for SQL Server

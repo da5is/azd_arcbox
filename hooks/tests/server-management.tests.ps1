@@ -28,9 +28,16 @@ Describe 'Windows KMS version and edition selection' {
     It 'includes the prebuilt SQL guest and verifies actual Windows licensing state' {
         $source = Get-Content (Join-Path $root 'artifacts\ArcServersLogonScript.ps1') -Raw
         $source | Should -Match 'Set-ArcBoxWindowsActivation -VMName \$SQLvmName'
+        $source.IndexOf('Set-ArcBoxWindowsActivation -VMName $SQLvmName') | Should -BeGreaterThan $source.IndexOf("Write-Host 'VM has rebooted successfully!'")
         (Get-Content (Join-Path $root 'artifacts\ArcBoxServerManagement.ps1') -Raw) | Should -Match 'LicenseStatus -eq 1'
     }
     It 'does not accept cscript success without an activated Windows license' {
+        $script:activationClock = 0
+        Mock Get-Date {
+            $script:activationClock++
+            [datetime]'2026-01-01' + [timespan]::FromMinutes(10 * ($script:activationClock - 1))
+        }
+        Mock Start-Sleep {}
         Mock Invoke-Command {
             if ($ScriptBlock.ToString() -match 'Win32_OperatingSystem') { return @{ BuildNumber = '20348'; Caption = 'Windows Server 2022 Standard' } }
             & $ScriptBlock @ArgumentList
@@ -40,6 +47,30 @@ Describe 'Windows KMS version and edition selection' {
         $credential = [pscredential]::new('Administrator', (ConvertTo-SecureString 'UnitTestPassword1!' -AsPlainText -Force))
         { Set-ArcBoxWindowsActivation -VMName win22sql22 -Credential $credential } | Should -Throw '*did not report an activated*'
         Should -Invoke cscript.exe -Exactly -Times 3
+    }
+    It 'retries only transient KMS contact failure and requires the resulting activated license' {
+        $script:licenseReads = 0
+        $script:activationAttempts = 0
+        Mock Invoke-Command {
+            if ($ScriptBlock.ToString() -match 'Win32_OperatingSystem') { return @{ BuildNumber = '20348'; Caption = 'Windows Server 2022 Standard' } }
+            & $ScriptBlock @ArgumentList
+        }
+        Mock Get-CimInstance {
+            $script:licenseReads++
+            if ($script:licenseReads -ge 3) { @{ LicenseStatus = 1; Description = 'VOLUME_KMSCLIENT'; PartialProductKey = 'VMK7H' } }
+        }
+        Mock cscript.exe {
+            $global:LASTEXITCODE = 0
+            if ($Arguments -contains '-ato') {
+                $script:activationAttempts++
+                if ($script:activationAttempts -eq 1) { $global:LASTEXITCODE = -1073418124 }
+            }
+        }
+        Mock Start-Sleep {}
+        $credential = [pscredential]::new('Administrator', (ConvertTo-SecureString 'UnitTestPassword1!' -AsPlainText -Force))
+        { Set-ArcBoxWindowsActivation -VMName win22sql22 -Credential $credential } | Should -Not -Throw
+        $script:activationAttempts | Should -Be 2
+        Should -Invoke Start-Sleep -Exactly -Times 1
     }
 }
 
