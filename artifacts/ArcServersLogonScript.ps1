@@ -687,7 +687,7 @@ if ($Env:flavor -ne 'DevOps') {
         Add-Content -Path "$Env:USERPROFILE\.ssh\config" -Value 'StrictHostKeyChecking=accept-new'
 
         Get-VM -Name $UbuntuVMNames | Wait-VM -For Heartbeat -Timeout 600 -ErrorAction Stop
-        Get-VM -Name $UbuntuVMNames | Copy-VMFile -SourcePath "$Env:TEMP\authorized_keys" -DestinationPath "/home/$nestedLinuxUsername/.ssh" -FileSource Host -Force -CreateFullPath -ErrorAction Stop
+        Copy-ArcBoxLinuxGuestFile -VMName $UbuntuVMNames -SourcePath "$Env:TEMP\authorized_keys" -DestinationDirectory "/home/$nestedLinuxUsername/.ssh"
 
         foreach ($guest in @(
             @{ Name = $Ubuntu01vmName; IP = $Ubuntu01VmIp },
@@ -768,7 +768,7 @@ if ($Env:flavor -ne 'DevOps') {
         # Copy installation script to nested Linux VMs
         Write-Output 'Transferring installation script to nested Linux VMs...'
 
-        Get-VM -Name $UbuntuVMNames | Copy-VMFile -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername" -FileSource Host -Force -ErrorAction Stop
+        Copy-ArcBoxLinuxGuestFile -VMName $UbuntuVMNames -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationDirectory "/home/$nestedLinuxUsername"
 
         Write-Output 'Activating operating system on Windows VMs...'
         foreach ($vmName in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
@@ -803,7 +803,7 @@ if ($Env:flavor -ne 'DevOps') {
 
         Write-Header 'Installing SQL Server 2025 on ubu24sql25'
         $null = Update-AzTag -ResourceId "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -Operation Merge -Tag @{ DeploymentProgress = 'Installing SQL Server 2025 on ubu24sql25' } -ErrorAction Stop
-        Copy-VMFile -Name $Ubuntu01vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServerUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername" -FileSource Host -Force -ErrorAction Stop
+        Copy-ArcBoxLinuxGuestFile -VMName $Ubuntu01vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServerUbuntu.sh" -DestinationDirectory "/home/$nestedLinuxUsername"
         $sqlSession = $UbuntuSessions | Where-Object ComputerName -eq $Ubuntu01VmIp
         if ($null -eq $sqlSession) { throw 'The Ubuntu SQL guest session is missing.' }
         Invoke-Command -Session $sqlSession -ArgumentList $nestedGuestPassword, $sqlMode -ErrorAction Stop -ScriptBlock {

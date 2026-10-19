@@ -831,13 +831,13 @@ Describe 'ArcBox guest provisioning safeguards' {
         $copies = @($ast.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.CommandAst] -and
-                $node.GetCommandName() -eq 'Copy-VMFile' -and
+                $node.GetCommandName() -eq 'Copy-ArcBoxLinuxGuestFile' -and
                 $node.Extent.Text -match '/home/'
         }, $true))
         $copies.Count | Should -Be 3
-        $copies[0].Extent.Text | Should -Match '-DestinationPath "/home/\$nestedLinuxUsername/\.ssh" '
-        $copies[1].Extent.Text | Should -Match '-DestinationPath "/home/\$nestedLinuxUsername" '
-        $copies[2].Extent.Text | Should -Match '-DestinationPath "/home/\$nestedLinuxUsername" '
+        $copies[0].Extent.Text | Should -Match '-DestinationDirectory "/home/\$nestedLinuxUsername/\.ssh"'
+        $copies[1].Extent.Text | Should -Match '-DestinationDirectory "/home/\$nestedLinuxUsername"'
+        $copies[2].Extent.Text | Should -Match '-DestinationDirectory "/home/\$nestedLinuxUsername"'
     }
     It 'configures lifecycle policies only for the six named guests' {
         $loop = $ast.Find({

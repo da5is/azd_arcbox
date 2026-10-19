@@ -7,6 +7,7 @@ BeforeAll {
     function az { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) throw 'Unexpected Azure CLI call.' }
     function Invoke-AzRestMethod { param($Method, $Path, $Payload) throw 'Unexpected Azure REST call.' }
     function cscript.exe { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) throw 'Unexpected activation call.' }
+    function Copy-VMFile { param($Name, $SourcePath, $DestinationPath, $FileSource, [switch]$Force, [switch]$CreateFullPath) throw 'Unexpected Hyper-V file copy.' }
 }
 
 Describe 'Windows KMS version and edition selection' {
@@ -153,6 +154,38 @@ Describe 'Six-machine management orchestration' {
         Should -Invoke Install-ArcBoxServerExtension -Times 6 -Exactly -ParameterFilter { $Name -like 'ChangeTracking-*' }
         Should -Invoke Invoke-ArcBoxServerAz -Times 18 -Exactly
         Should -Invoke Invoke-AzRestMethod -Times 12 -Exactly
+    }
+}
+
+Describe 'Linux guest file-copy startup readiness' {
+    BeforeEach {
+        $script:source = Join-Path $TestDrive 'authorized_keys'
+        Set-Content -LiteralPath $script:source -Value 'public-test-key'
+        Mock Start-Sleep {}
+    }
+    It 'retries the observed 0x80004005 startup failure with the exact directory destination' {
+        $script:copies = 0
+        Mock Copy-VMFile {
+            $script:copies++
+            if ($script:copies -eq 1) { throw 'Unspecified error (0x80004005)' }
+        }
+        Copy-ArcBoxLinuxGuestFile -VMName ubu24 -SourcePath $script:source -DestinationDirectory '/home/jumpstart/.ssh'
+        Should -Invoke Copy-VMFile -Exactly -Times 2 -ParameterFilter { $DestinationPath -eq '/home/jumpstart/.ssh' -and $Name -eq 'ubu24' -and $CreateFullPath }
+    }
+    It 'does not retry unrelated copy errors' {
+        Mock Copy-VMFile { throw 'Access denied (0x80070005)' }
+        { Copy-ArcBoxLinuxGuestFile -VMName ubu24 -SourcePath $script:source -DestinationDirectory '/home/jumpstart/.ssh' } | Should -Throw '*Access denied*'
+        Should -Invoke Copy-VMFile -Exactly -Times 1
+    }
+    It 'bounds retries even if integration services report healthy' {
+        $script:clock = 0
+        Mock Get-Date {
+            $script:clock++
+            [datetime]'2026-01-01' + [timespan]::FromMinutes(5 * ($script:clock - 1))
+        }
+        Mock Copy-VMFile { throw 'Unspecified error (0x80004005)' }
+        { Copy-ArcBoxLinuxGuestFile -VMName ubu24 -SourcePath $script:source -DestinationDirectory '/home/jumpstart/.ssh' } | Should -Throw '*0x80004005*'
+        Should -Invoke Start-Sleep -Exactly -Times 0
     }
 }
 

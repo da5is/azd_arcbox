@@ -71,6 +71,29 @@ function Set-ArcBoxWindowsActivation {
     }
 }
 
+function Copy-ArcBoxLinuxGuestFile {
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string[]]$VMName,
+        [Parameter(Mandatory)][string]$SourcePath,
+        [Parameter(Mandatory)][string]$DestinationDirectory
+    )
+
+    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) { throw "Guest file-copy source does not exist: $SourcePath" }
+    foreach ($machine in $VMName) {
+        $deadline = (Get-Date).AddMinutes(3)
+        while ($true) {
+            try {
+                Copy-VMFile -Name $machine -SourcePath $SourcePath -DestinationPath $DestinationDirectory -FileSource Host -Force -CreateFullPath -ErrorAction Stop
+                break
+            } catch {
+                if ($_.Exception.Message -notmatch '0x80004005' -or (Get-Date) -ge $deadline) { throw }
+                Write-Warning "Guest file copy on '$machine' returned 0x80004005; retrying within the startup deadline."
+                Start-Sleep -Seconds 5
+            }
+        }
+    }
+}
+
 function Get-ArcBoxServerExtensions {
     param([Parameter(Mandatory)][string]$MachineName)
 
