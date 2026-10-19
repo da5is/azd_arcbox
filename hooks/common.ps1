@@ -139,6 +139,7 @@ function Assert-ArcBoxSqlArtifacts {
         'artifacts\ArcServersLogonScript.ps1',
         'artifacts\InstallNestedSqlServer.ps1',
         'artifacts\InstallNestedSqlServerUbuntu.sh',
+        'artifacts\installArcAgentUbuntu.sh',
         'artifacts\ArcBoxServerManagement.ps1',
         'artifacts\dsc\virtual_machines_itpro.dsc.yml',
         'artifacts\tests\itpro.tests.ps1'

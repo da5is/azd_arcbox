@@ -203,9 +203,9 @@ Describe 'ArcBox Evaluation artifact preflight' {
 
     It 'accepts matching published scripts and deployed checks' {
         Assert-ArcBoxSqlArtifacts
-        $script:artifactRequests.Count | Should -Be 7
+        $script:artifactRequests.Count | Should -Be 8
         $script:artifactRequests[0] | Should -Be 'https://raw.githubusercontent.com/da5is/azd_arcbox/main/artifacts/Bootstrap.ps1'
-        Should -Invoke Invoke-WebRequest -Exactly -Times 7 -ParameterFilter { $TimeoutSec -eq 30 -and $ErrorAction -eq 'Stop' }
+        Should -Invoke Invoke-WebRequest -Exactly -Times 8 -ParameterFilter { $TimeoutSec -eq 30 -and $ErrorAction -eq 'Stop' }
     }
     It 'uses the configured public account and branch' {
         $env:JS_GITHUB_ACCOUNT = 'test-owner'
@@ -226,6 +226,7 @@ Describe 'ArcBox Evaluation artifact preflight' {
         @{ artifact = 'ArcServersLogonScript.ps1' },
         @{ artifact = 'InstallNestedSqlServer.ps1' },
         @{ artifact = 'InstallNestedSqlServerUbuntu.sh' },
+        @{ artifact = 'installArcAgentUbuntu.sh' },
         @{ artifact = 'ArcBoxServerManagement.ps1' },
         @{ artifact = 'virtual_machines_itpro.dsc.yml' },
         @{ artifact = 'itpro.tests.ps1' }

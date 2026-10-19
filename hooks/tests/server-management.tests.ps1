@@ -232,6 +232,9 @@ Describe 'ITPro management infrastructure and naming' {
         $logon | Should -Match 'sudo -n hostnamectl set-hostname \$Name 2>&1'
         $logon | Should -Match 'Install-ArcBoxServerExtension -MachineName \$Ubuntu01vmName -Name ''LinuxAgent.SqlServer'''
         $logon | Should -Not -Match 'Install-ArcBoxServerExtension -MachineName \$Ubuntu02vmName -Name ''LinuxAgent.SqlServer'''
+        $agent = Get-Content (Join-Path $root 'artifacts\installArcAgentUbuntu.sh') -Raw
+        $agent | Should -Match 'ArcServerResourceName=\$\(hostname\)'
+        $agent | Should -Not -Match 'hostname \|sed'
     }
     It 'gives the client only workspace-scoped metrics query access before bootstrap' {
         $source = Get-Content (Join-Path $root 'bicep\clientVm\clientVm.bicep') -Raw
@@ -271,6 +274,24 @@ Describe 'Linux native stderr over PowerShell remoting' {
     It 'merges installer and onboarding stderr while explicitly checking native exit codes' {
         $source | Should -Match '(?m)InstallNestedSqlServerUbuntu.sh \$Mode 2>&1 \| ForEach-Object'
         $source | Should -Match 'Linux Arc onboarding failed \(exit code \$LASTEXITCODE\)'
+    }
+    It 'generates the onboarding shell artifact with no CR bytes on Windows' {
+        $pipeline = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Set-Content' -and
+                $node.Extent.Text -match 'installArcAgentModifiedUbuntu.sh'
+        }, $true).Parent
+        $agentScript = Join-Path $TestDrive 'agents'
+        $null = New-Item -Path $agentScript -ItemType Directory
+        Copy-Item (Join-Path $root 'artifacts\installArcAgentUbuntu.sh') (Join-Path $agentScript 'installArcAgentUbuntu.sh')
+        $accessToken = 'synthetic-test-token'
+        $resourceGroup = 'test-rg'
+        $subscriptionId = '00000000-0000-0000-0000-000000000001'
+        & ([scriptblock]::Create($pipeline.Extent.Text))
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $agentScript 'installArcAgentModifiedUbuntu.sh'))
+        $bytes.Length | Should -BeGreaterThan 0
+        $bytes | Should -Not -Contain 13
     }
 }
 

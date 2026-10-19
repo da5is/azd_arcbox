@@ -763,7 +763,7 @@ if ($Env:flavor -ne 'DevOps') {
 
         # Update Linux VM onboarding script connect to Azure Arc, get new token as it might have been expired by the time execution reached this line.
         $accessToken = ConvertFrom-SecureString ((Get-AzAccessToken -AsSecureString).Token) -AsPlainText
-        (Get-Content -Path "$agentScript\installArcAgentUbuntu.sh" -Raw) -replace '\$accessToken', $accessToken -replace '\$resourceGroup', $resourceGroup -replace '\$tenantId', $Env:tenantId -replace '\$azureLocation', $Env:azureLocation -replace '\$subscriptionId', $subscriptionId | Set-Content -Path "$agentScript\installArcAgentModifiedUbuntu.sh"
+        (Get-Content -Path "$agentScript\installArcAgentUbuntu.sh" -Raw).Replace("`r`n", "`n") -replace '\$accessToken', $accessToken -replace '\$resourceGroup', $resourceGroup -replace '\$tenantId', $Env:tenantId -replace '\$azureLocation', $Env:azureLocation -replace '\$subscriptionId', $subscriptionId | Set-Content -Path "$agentScript\installArcAgentModifiedUbuntu.sh" -NoNewline
 
         # Copy installation script to nested Linux VMs
         Write-Output 'Transferring installation script to nested Linux VMs...'
@@ -800,7 +800,9 @@ if ($Env:flavor -ne 'DevOps') {
             }
         } -ArgumentList $nestedGuestPassword -ErrorAction Stop
         Invoke-Command -Session $UbuntuSessions -ErrorAction Stop -ScriptBlock {
-            sudo -n sh "/home/$using:nestedLinuxUsername/installArcAgentModifiedUbuntu.sh" 2>&1 | ForEach-Object { Write-Host ([string]$_) }
+            sudo -n sh "/home/$using:nestedLinuxUsername/installArcAgentModifiedUbuntu.sh" 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host $_.Exception.Message } else { Write-Host ([string]$_) }
+            }
             if ($LASTEXITCODE -ne 0) { throw "Linux Arc onboarding failed (exit code $LASTEXITCODE)." }
         }
 
@@ -811,7 +813,9 @@ if ($Env:flavor -ne 'DevOps') {
         if ($null -eq $sqlSession) { throw 'The Ubuntu SQL guest session is missing.' }
         Invoke-Command -Session $sqlSession -ArgumentList $nestedGuestPassword, $sqlMode -ErrorAction Stop -ScriptBlock {
             param([string]$Password, [string]$Mode)
-            $Password | sudo -n timeout --kill-after=30s 90m bash /home/jumpstart/InstallNestedSqlServerUbuntu.sh $Mode 2>&1 | ForEach-Object { Write-Host ([string]$_) }
+            $Password | sudo -n timeout --kill-after=30s 90m bash /home/jumpstart/InstallNestedSqlServerUbuntu.sh $Mode 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host $_.Exception.Message } else { Write-Host ([string]$_) }
+            }
             if ($LASTEXITCODE -ne 0) { throw "Ubuntu SQL setup failed (exit code $LASTEXITCODE)." }
         }
         Install-ArcBoxServerExtension -MachineName $Ubuntu01vmName -Name 'LinuxAgent.SqlServer' -Publisher 'Microsoft.AzureData' -Settings @{

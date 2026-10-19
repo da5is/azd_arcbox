@@ -31,7 +31,7 @@ if ! command -v azcmagent >/dev/null 2>&1; then
     bash "$installer"
 fi
 
-ArcServerResourceName=$(hostname |sed -e "s/\b\(.\)/\u\1/g")
+ArcServerResourceName=$(hostname)
 
 # Run connect command
 azcmagent connect --access-token "$accessToken" --resource-group "$resourceGroup" --tenant-id "$tenantId" --location "$Azurelocation" --subscription-id "$subscriptionId" --resource-name "${ArcServerResourceName}" --cloud "AzureCloud" --correlation-id "d009f5dd-dba8-4ac7-bac9-b54ef3a6671a"
