@@ -203,9 +203,9 @@ Describe 'ArcBox Evaluation artifact preflight' {
 
     It 'accepts matching published scripts and deployed checks' {
         Assert-ArcBoxSqlArtifacts
-        $script:artifactRequests.Count | Should -Be 4
+        $script:artifactRequests.Count | Should -Be 8
         $script:artifactRequests[0] | Should -Be 'https://raw.githubusercontent.com/da5is/azd_arcbox/main/artifacts/Bootstrap.ps1'
-        Should -Invoke Invoke-WebRequest -Exactly -Times 4 -ParameterFilter { $TimeoutSec -eq 30 -and $ErrorAction -eq 'Stop' }
+        Should -Invoke Invoke-WebRequest -Exactly -Times 8 -ParameterFilter { $TimeoutSec -eq 30 -and $ErrorAction -eq 'Stop' }
     }
     It 'uses the configured public account and branch' {
         $env:JS_GITHUB_ACCOUNT = 'test-owner'
@@ -225,6 +225,10 @@ Describe 'ArcBox Evaluation artifact preflight' {
         @{ artifact = 'Bootstrap.ps1' },
         @{ artifact = 'ArcServersLogonScript.ps1' },
         @{ artifact = 'InstallNestedSqlServer.ps1' },
+        @{ artifact = 'InstallNestedSqlServerUbuntu.sh' },
+        @{ artifact = 'installArcAgentUbuntu.sh' },
+        @{ artifact = 'ArcBoxServerManagement.ps1' },
+        @{ artifact = 'virtual_machines_itpro.dsc.yml' },
         @{ artifact = 'itpro.tests.ps1' }
     ) {
         $script:staleArtifact = $artifact
@@ -781,11 +785,11 @@ Describe 'ArcBox standalone artifact source' {
 }
 
 Describe 'ArcBox ITPro nested memory allocation' {
-    It 'allocates 2 GB to each Ubuntu guest to leave client memory headroom' {
+    It 'allocates 4 GB to Ubuntu SQL and 2 GB to the non-SQL guest' {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
         $configuration = Get-Content (Join-Path $arcboxRoot 'artifacts\dsc\virtual_machines_itpro.dsc.yml') -Raw
-        foreach ($guest in @('Ubuntu-01', 'Ubuntu-02')) {
-            $configuration | Should -Match "(?s)VhdPath: [^\r\n]*namingPrefixStage-$guest\.vhdx\s+ProcessorCount: 2\s+StartupMemory: '2GB'"
+        foreach ($guest in @(@{ Image = 'Ubuntu-01'; Memory = 4 }, @{ Image = 'Ubuntu-02'; Memory = 2 })) {
+            $configuration | Should -Match "(?s)VhdPath: [^\r\n]*namingPrefixStage-$($guest.Image)\.vhdx\s+ProcessorCount: 2\s+StartupMemory: '$($guest.Memory)GB'"
         }
     }
 }
@@ -828,12 +832,13 @@ Describe 'ArcBox guest provisioning safeguards' {
         $copies = @($ast.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.CommandAst] -and
-                $node.GetCommandName() -eq 'Copy-VMFile' -and
+                $node.GetCommandName() -eq 'Copy-ArcBoxLinuxGuestFile' -and
                 $node.Extent.Text -match '/home/'
         }, $true))
-        $copies.Count | Should -Be 2
-        $copies[0].Extent.Text | Should -Match '-DestinationPath "/home/\$nestedLinuxUsername/\.ssh" '
-        $copies[1].Extent.Text | Should -Match '-DestinationPath "/home/\$nestedLinuxUsername" '
+        $copies.Count | Should -Be 3
+        $copies[0].Extent.Text | Should -Match '-DestinationDirectory "/home/\$nestedLinuxUsername/\.ssh"'
+        $copies[1].Extent.Text | Should -Match '-DestinationDirectory "/home/\$nestedLinuxUsername"'
+        $copies[2].Extent.Text | Should -Match '-DestinationDirectory "/home/\$nestedLinuxUsername"'
     }
     It 'configures lifecycle policies only for the six named guests' {
         $loop = $ast.Find({
@@ -1247,7 +1252,7 @@ Describe 'ArcBox SQL installation modes' {
         $client.parameters.PSObject.Properties.Name | Should -Not -Contain nestedSqlByolEdition
         $hostSource = Get-Content (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1') -Raw
         ([regex]::Matches($hostSource, '-InstallationMode \$mode')).Count | Should -Be 2
-        $hostSource | Should -Match 'Install-ArcBoxSqlExtension -MachineName \$sqlVmName -LicenseType LicenseOnly'
+        $hostSource | Should -Match 'Install-ArcBoxSqlExtension -MachineName \$additionalSqlMachine -LicenseType LicenseOnly'
         $hostSource | Should -Not -Match 'ByolEdition|sqlGuestLicenseTypes|Installation\.json'
         $installer | Should -Not -Match 'LicenseType|''Paid''|Installation\.json'
     }

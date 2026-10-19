@@ -582,6 +582,16 @@ resource securityGallery 'Microsoft.OperationsManagement/solutions@2015-11-01-pr
   }
 }
 
+module arcServerMonitoring './arcServerMonitoring.bicep' = if (flavor == 'ITPro') {
+  name: 'arcServerMonitoring'
+  params: {
+    location: location
+    namingPrefix: namingPrefix
+    workspaceId: workspace.id
+    resourceTags: resourceTags
+  }
+}
+
 resource publicIpAddress 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (deployBastion == true) {
   name: bastionPublicIpAddressName
   location: location

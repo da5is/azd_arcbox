@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "14573463306528448691"
+      "templateHash": "10618759334577407717"
     }
   },
   "parameters": {
@@ -1557,7 +1557,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "3140738538828754840"
+              "templateHash": "18150836867297116166"
             }
           },
           "parameters": {
@@ -2017,6 +2017,7 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+                "[extensionResourceId(resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Monitoring Data Reader'))]",
                 "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Microsoft.Authorization/roleAssignments', 'Administrator'))]",
                 "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Microsoft.Authorization/roleAssignments', 'Owner'))]",
                 "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Microsoft.Authorization/roleAssignments', 'Storage Blob Data Contributor'))]"
@@ -2065,6 +2066,21 @@
                 "principalId": "[reference(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), '2024-07-01', 'full').identity.principalId]",
                 "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
                 "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+              ]
+            },
+            {
+              "condition": "[equals(parameters('flavor'), 'ITPro')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix')))]",
+              "name": "[guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Monitoring Data Reader')]",
+              "properties": {
+                "principalId": "[reference(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), '2024-07-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b0d8363b-8ddd-447d-831f-62ca05bff136')]"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
@@ -2252,7 +2268,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "17625221306866548170"
+              "templateHash": "7592347528279047392"
             }
           },
           "parameters": {
@@ -3016,6 +3032,250 @@
                 "keyVault"
               ]
             },
+            "arcServerMonitoring": {
+              "condition": "[equals(parameters('flavor'), 'ITPro')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "arcServerMonitoring",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "namingPrefix": {
+                    "value": "[parameters('namingPrefix')]"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+                  },
+                  "resourceTags": {
+                    "value": "[parameters('resourceTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.48.1.52935",
+                      "templateHash": "12248710425525502479"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string"
+                    },
+                    "namingPrefix": {
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    },
+                    "resourceTags": {
+                      "type": "object"
+                    }
+                  },
+                  "variables": {
+                    "changeStreams": [
+                      "Microsoft-ConfigurationChange",
+                      "Microsoft-ConfigurationChangeV2",
+                      "Microsoft-ConfigurationData"
+                    ]
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.OperationsManagement/solutions",
+                      "apiVersion": "2015-11-01-preview",
+                      "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "workspaceResourceId": "[parameters('workspaceId')]"
+                      },
+                      "plan": {
+                        "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                        "product": "OMSGallery/ChangeTracking",
+                        "publisher": "Microsoft",
+                        "promotionCode": ""
+                      }
+                    },
+                    {
+                      "copy": {
+                        "name": "inventoryTables",
+                        "count": "[length(createArray('ConfigurationChange', 'ConfigurationData'))]"
+                      },
+                      "type": "Microsoft.OperationalInsights/workspaces/tables",
+                      "apiVersion": "2023-09-01",
+                      "name": "[format('{0}/{1}', last(split(parameters('workspaceId'), '/')), createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()])]",
+                      "properties": {
+                        "schema": {
+                          "name": "[createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()]]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.OperationsManagement/solutions', format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/'))))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Monitor/accounts",
+                      "apiVersion": "2023-04-03",
+                      "name": "[format('{0}-monitor', parameters('namingPrefix'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {}
+                    },
+                    {
+                      "type": "Microsoft.Insights/dataCollectionRules",
+                      "apiVersion": "2024-03-11",
+                      "name": "[format('{0}-OTel', parameters('namingPrefix'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {
+                        "dataSources": {
+                          "performanceCountersOTel": [
+                            {
+                              "name": "OtelHostMetrics",
+                              "streams": [
+                                "Microsoft-OtelPerfMetrics"
+                              ],
+                              "samplingFrequencyInSeconds": 60,
+                              "counterSpecifiers": [
+                                "system.filesystem.usage",
+                                "system.disk.io",
+                                "system.disk.operation_time",
+                                "system.disk.operations",
+                                "system.memory.usage",
+                                "system.network.io",
+                                "system.cpu.time",
+                                "system.network.dropped",
+                                "system.network.errors",
+                                "system.uptime"
+                              ]
+                            }
+                          ]
+                        },
+                        "destinations": {
+                          "monitoringAccounts": [
+                            {
+                              "name": "HostMetrics",
+                              "accountResourceId": "[resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix')))]"
+                            }
+                          ]
+                        },
+                        "dataFlows": [
+                          {
+                            "streams": [
+                              "Microsoft-OtelPerfMetrics"
+                            ],
+                            "destinations": [
+                              "HostMetrics"
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/dataCollectionRules",
+                      "apiVersion": "2024-03-11",
+                      "name": "[format('{0}-Inventory', parameters('namingPrefix'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {
+                        "dataSources": {
+                          "copy": [
+                            {
+                              "name": "extensions",
+                              "count": "[length(createArray('Windows', 'Linux'))]",
+                              "input": {
+                                "name": "[format('Inventory{0}', createArray('Windows', 'Linux')[copyIndex('extensions')])]",
+                                "extensionName": "[format('ChangeTracking-{0}', createArray('Windows', 'Linux')[copyIndex('extensions')])]",
+                                "streams": "[variables('changeStreams')]",
+                                "extensionSettings": {
+                                  "enableFiles": false,
+                                  "enableRegistry": false,
+                                  "enableInventory": true,
+                                  "enableServices": true,
+                                  "enableSoftware": true,
+                                  "inventorySettings": {
+                                    "inventoryCollectionFrequency": 3600
+                                  },
+                                  "servicesSettings": {
+                                    "serviceCollectionFrequency": 300
+                                  },
+                                  "softwareSettings": {
+                                    "softwareCollectionFrequency": 300
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "destinations": {
+                          "logAnalytics": [
+                            {
+                              "name": "Inventory",
+                              "workspaceResourceId": "[parameters('workspaceId')]"
+                            }
+                          ]
+                        },
+                        "dataFlows": [
+                          {
+                            "streams": "[variables('changeStreams')]",
+                            "destinations": [
+                              "Inventory"
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "inventoryTables"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "logRules",
+                        "count": "[length(createArray('Windows', 'Linux'))]"
+                      },
+                      "type": "Microsoft.Insights/dataCollectionRules",
+                      "apiVersion": "2024-03-11",
+                      "name": "[format('{0}-Logs-{1}', parameters('namingPrefix'), createArray('Windows', 'Linux')[copyIndex()])]",
+                      "location": "[parameters('location')]",
+                      "kind": "[createArray('Windows', 'Linux')[copyIndex()]]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {
+                        "dataSources": "[if(equals(createArray('Windows', 'Linux')[copyIndex()], 'Windows'), createObject('windowsEventLogs', createArray(createObject('name', 'SystemAndApplicationErrors', 'streams', createArray('Microsoft-Event'), 'xPathQueries', createArray('System!*[System[(Level=1 or Level=2 or Level=3)]]', 'Application!*[System[(Level=1 or Level=2 or Level=3)]]')))), createObject('syslog', createArray(createObject('name', 'SystemWarnings', 'streams', createArray('Microsoft-Syslog'), 'facilityNames', createArray('daemon', 'syslog', 'user'), 'logLevels', createArray('Warning', 'Error', 'Critical', 'Alert', 'Emergency')))))]",
+                        "destinations": {
+                          "logAnalytics": [
+                            {
+                              "name": "Logs",
+                              "workspaceResourceId": "[parameters('workspaceId')]"
+                            }
+                          ]
+                        },
+                        "dataFlows": [
+                          {
+                            "streams": "[if(equals(createArray('Windows', 'Linux')[copyIndex()], 'Windows'), createArray('Microsoft-Event'), createArray('Microsoft-Syslog'))]",
+                            "destinations": [
+                              "Logs"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "workspace"
+              ]
+            },
             "policyDeployment": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -3046,7 +3306,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.48.1.52935",
-                      "templateHash": "4261655878196771221"
+                      "templateHash": "14586154415468902994"
                     }
                   },
                   "parameters": {
@@ -3103,6 +3363,16 @@
                     }
                   },
                   "variables": {
+                    "computeBaselines": [
+                      {
+                        "name": "ArcBox-WindowsBaseline",
+                        "definition": "72650e9f-97bc-4b2a-ab5f-9781a9fcecbc"
+                      },
+                      {
+                        "name": "ArcBox-LinuxBaseline",
+                        "definition": "fc9b3da7-8347-4380-8e70-0a0361d8dedd"
+                      }
+                    ],
                     "policies": [
                       {
                         "name": "(ArcBox) Enable Azure Monitor for Hybrid VMs with AMA",
@@ -3136,6 +3406,41 @@
                     ]
                   },
                   "resources": [
+                    {
+                      "copy": {
+                        "name": "computeBaselineAssignments",
+                        "count": "[length(variables('computeBaselines'))]"
+                      },
+                      "condition": "[equals(parameters('flavor'), 'ITPro')]",
+                      "type": "Microsoft.Authorization/policyAssignments",
+                      "apiVersion": "2025-01-01",
+                      "name": "[variables('computeBaselines')[copyIndex()].name]",
+                      "properties": {
+                        "displayName": "[format('(ArcBox) {0} audit', variables('computeBaselines')[copyIndex()].name)]",
+                        "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', variables('computeBaselines')[copyIndex()].definition)]",
+                        "parameters": {
+                          "IncludeArcMachines": {
+                            "value": "true"
+                          },
+                          "effect": {
+                            "value": "AuditIfNotExists"
+                          }
+                        },
+                        "resourceSelectors": [
+                          {
+                            "name": "ArcServersOnly",
+                            "selectors": [
+                              {
+                                "kind": "resourceType",
+                                "in": [
+                                  "Microsoft.HybridCompute/machines"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
                     {
                       "copy": {
                         "name": "policies_name",
@@ -6210,7 +6515,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "17625221306866548170"
+              "templateHash": "7592347528279047392"
             }
           },
           "parameters": {
@@ -6974,6 +7279,250 @@
                 "keyVault"
               ]
             },
+            "arcServerMonitoring": {
+              "condition": "[equals(parameters('flavor'), 'ITPro')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "arcServerMonitoring",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "namingPrefix": {
+                    "value": "[parameters('namingPrefix')]"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+                  },
+                  "resourceTags": {
+                    "value": "[parameters('resourceTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.48.1.52935",
+                      "templateHash": "12248710425525502479"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string"
+                    },
+                    "namingPrefix": {
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    },
+                    "resourceTags": {
+                      "type": "object"
+                    }
+                  },
+                  "variables": {
+                    "changeStreams": [
+                      "Microsoft-ConfigurationChange",
+                      "Microsoft-ConfigurationChangeV2",
+                      "Microsoft-ConfigurationData"
+                    ]
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.OperationsManagement/solutions",
+                      "apiVersion": "2015-11-01-preview",
+                      "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "workspaceResourceId": "[parameters('workspaceId')]"
+                      },
+                      "plan": {
+                        "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                        "product": "OMSGallery/ChangeTracking",
+                        "publisher": "Microsoft",
+                        "promotionCode": ""
+                      }
+                    },
+                    {
+                      "copy": {
+                        "name": "inventoryTables",
+                        "count": "[length(createArray('ConfigurationChange', 'ConfigurationData'))]"
+                      },
+                      "type": "Microsoft.OperationalInsights/workspaces/tables",
+                      "apiVersion": "2023-09-01",
+                      "name": "[format('{0}/{1}', last(split(parameters('workspaceId'), '/')), createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()])]",
+                      "properties": {
+                        "schema": {
+                          "name": "[createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()]]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.OperationsManagement/solutions', format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/'))))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Monitor/accounts",
+                      "apiVersion": "2023-04-03",
+                      "name": "[format('{0}-monitor', parameters('namingPrefix'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {}
+                    },
+                    {
+                      "type": "Microsoft.Insights/dataCollectionRules",
+                      "apiVersion": "2024-03-11",
+                      "name": "[format('{0}-OTel', parameters('namingPrefix'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {
+                        "dataSources": {
+                          "performanceCountersOTel": [
+                            {
+                              "name": "OtelHostMetrics",
+                              "streams": [
+                                "Microsoft-OtelPerfMetrics"
+                              ],
+                              "samplingFrequencyInSeconds": 60,
+                              "counterSpecifiers": [
+                                "system.filesystem.usage",
+                                "system.disk.io",
+                                "system.disk.operation_time",
+                                "system.disk.operations",
+                                "system.memory.usage",
+                                "system.network.io",
+                                "system.cpu.time",
+                                "system.network.dropped",
+                                "system.network.errors",
+                                "system.uptime"
+                              ]
+                            }
+                          ]
+                        },
+                        "destinations": {
+                          "monitoringAccounts": [
+                            {
+                              "name": "HostMetrics",
+                              "accountResourceId": "[resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix')))]"
+                            }
+                          ]
+                        },
+                        "dataFlows": [
+                          {
+                            "streams": [
+                              "Microsoft-OtelPerfMetrics"
+                            ],
+                            "destinations": [
+                              "HostMetrics"
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/dataCollectionRules",
+                      "apiVersion": "2024-03-11",
+                      "name": "[format('{0}-Inventory', parameters('namingPrefix'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {
+                        "dataSources": {
+                          "copy": [
+                            {
+                              "name": "extensions",
+                              "count": "[length(createArray('Windows', 'Linux'))]",
+                              "input": {
+                                "name": "[format('Inventory{0}', createArray('Windows', 'Linux')[copyIndex('extensions')])]",
+                                "extensionName": "[format('ChangeTracking-{0}', createArray('Windows', 'Linux')[copyIndex('extensions')])]",
+                                "streams": "[variables('changeStreams')]",
+                                "extensionSettings": {
+                                  "enableFiles": false,
+                                  "enableRegistry": false,
+                                  "enableInventory": true,
+                                  "enableServices": true,
+                                  "enableSoftware": true,
+                                  "inventorySettings": {
+                                    "inventoryCollectionFrequency": 3600
+                                  },
+                                  "servicesSettings": {
+                                    "serviceCollectionFrequency": 300
+                                  },
+                                  "softwareSettings": {
+                                    "softwareCollectionFrequency": 300
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "destinations": {
+                          "logAnalytics": [
+                            {
+                              "name": "Inventory",
+                              "workspaceResourceId": "[parameters('workspaceId')]"
+                            }
+                          ]
+                        },
+                        "dataFlows": [
+                          {
+                            "streams": "[variables('changeStreams')]",
+                            "destinations": [
+                              "Inventory"
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "inventoryTables"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "logRules",
+                        "count": "[length(createArray('Windows', 'Linux'))]"
+                      },
+                      "type": "Microsoft.Insights/dataCollectionRules",
+                      "apiVersion": "2024-03-11",
+                      "name": "[format('{0}-Logs-{1}', parameters('namingPrefix'), createArray('Windows', 'Linux')[copyIndex()])]",
+                      "location": "[parameters('location')]",
+                      "kind": "[createArray('Windows', 'Linux')[copyIndex()]]",
+                      "tags": "[parameters('resourceTags')]",
+                      "properties": {
+                        "dataSources": "[if(equals(createArray('Windows', 'Linux')[copyIndex()], 'Windows'), createObject('windowsEventLogs', createArray(createObject('name', 'SystemAndApplicationErrors', 'streams', createArray('Microsoft-Event'), 'xPathQueries', createArray('System!*[System[(Level=1 or Level=2 or Level=3)]]', 'Application!*[System[(Level=1 or Level=2 or Level=3)]]')))), createObject('syslog', createArray(createObject('name', 'SystemWarnings', 'streams', createArray('Microsoft-Syslog'), 'facilityNames', createArray('daemon', 'syslog', 'user'), 'logLevels', createArray('Warning', 'Error', 'Critical', 'Alert', 'Emergency')))))]",
+                        "destinations": {
+                          "logAnalytics": [
+                            {
+                              "name": "Logs",
+                              "workspaceResourceId": "[parameters('workspaceId')]"
+                            }
+                          ]
+                        },
+                        "dataFlows": [
+                          {
+                            "streams": "[if(equals(createArray('Windows', 'Linux')[copyIndex()], 'Windows'), createArray('Microsoft-Event'), createArray('Microsoft-Syslog'))]",
+                            "destinations": [
+                              "Logs"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "workspace"
+              ]
+            },
             "policyDeployment": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -7004,7 +7553,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.48.1.52935",
-                      "templateHash": "4261655878196771221"
+                      "templateHash": "14586154415468902994"
                     }
                   },
                   "parameters": {
@@ -7061,6 +7610,16 @@
                     }
                   },
                   "variables": {
+                    "computeBaselines": [
+                      {
+                        "name": "ArcBox-WindowsBaseline",
+                        "definition": "72650e9f-97bc-4b2a-ab5f-9781a9fcecbc"
+                      },
+                      {
+                        "name": "ArcBox-LinuxBaseline",
+                        "definition": "fc9b3da7-8347-4380-8e70-0a0361d8dedd"
+                      }
+                    ],
                     "policies": [
                       {
                         "name": "(ArcBox) Enable Azure Monitor for Hybrid VMs with AMA",
@@ -7094,6 +7653,41 @@
                     ]
                   },
                   "resources": [
+                    {
+                      "copy": {
+                        "name": "computeBaselineAssignments",
+                        "count": "[length(variables('computeBaselines'))]"
+                      },
+                      "condition": "[equals(parameters('flavor'), 'ITPro')]",
+                      "type": "Microsoft.Authorization/policyAssignments",
+                      "apiVersion": "2025-01-01",
+                      "name": "[variables('computeBaselines')[copyIndex()].name]",
+                      "properties": {
+                        "displayName": "[format('(ArcBox) {0} audit', variables('computeBaselines')[copyIndex()].name)]",
+                        "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', variables('computeBaselines')[copyIndex()].definition)]",
+                        "parameters": {
+                          "IncludeArcMachines": {
+                            "value": "true"
+                          },
+                          "effect": {
+                            "value": "AuditIfNotExists"
+                          }
+                        },
+                        "resourceSelectors": [
+                          {
+                            "name": "ArcServersOnly",
+                            "selectors": [
+                              {
+                                "kind": "resourceType",
+                                "in": [
+                                  "Microsoft.HybridCompute/machines"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
                     {
                       "copy": {
                         "name": "policies_name",

@@ -267,6 +267,7 @@ resource vmBootstrap 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' =
     vmRoleAssignment_KeyVaultAdministrator
     vmRoleAssignment_Owner
     vmRoleAssignment_Storage
+    vmMetricsReader
   ]
   tags: {
     displayName: 'config-bootstrap'
@@ -326,6 +327,20 @@ resource vmRoleAssignment_Storage 'Microsoft.Authorization/roleAssignments@2022-
     principalId: vm.identity.principalId
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
     principalType: 'ServicePrincipal'
+  }
+}
+
+resource metricsWorkspace 'Microsoft.Monitor/accounts@2023-04-03' existing = if (flavor == 'ITPro') {
+  name: '${namingPrefix}-monitor'
+}
+
+resource vmMetricsReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (flavor == 'ITPro') {
+  name: guid(vm.id, 'Monitoring Data Reader')
+  scope: metricsWorkspace
+  properties: {
+    principalId: vm.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b0d8363b-8ddd-447d-831f-62ca05bff136')
   }
 }
 
