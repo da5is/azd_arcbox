@@ -138,6 +138,38 @@ Set a longer wait before resuming if needed:
 azd env set JS_ARCBOX_TIMEOUT_MINUTES 720 --environment arcbox-dataops
 ```
 
+### ITPro Arc server capabilities
+
+The ITPro deployment manages six nested guests. Their Hyper-V names, guest hostnames, and Arc machine names agree:
+
+| Guest | OS | SQL Server | Sample databases | Startup memory |
+| --- | --- | --- | --- | --- |
+| `win22sql22` | Windows Server 2022 | 2022, prebuilt | AdventureWorksLT2022, ArchiveDB | 6 GB |
+| `win19sql16` | Windows Server 2019 | 2016 SP3 | AdventureWorksLT2016, ArchiveDB | 4 GB |
+| `win22sql19` | Windows Server 2022 | 2019 | AdventureWorksLT2019, ArchiveDB | 4 GB |
+| `win25sql25` | Windows Server 2025 | 2025 | AdventureWorksLT2025, ArchiveDB | 4 GB |
+| `ubu24sql25` | Ubuntu 24.04 | 2025 | AdventureWorksLT2025, ArchiveDB | 4 GB |
+| `ubu24` | Ubuntu 24.04 | None | None | 2 GB |
+
+The Ubuntu names replace the former prefix-named Ubuntu-01/02 identities on a **new deployment**. The published Ubuntu VHD filenames remain unchanged. Do not rerun Bootstrap or try to rename an existing Arc registration by changing its template.
+
+`ubu24sql25` follows `JS_NESTED_SQL_MODE`, with a 2048-MB SQL process memory limit. Its `ArchiveDB.dbo.Records` has the same logical columns as Windows (`Id`, `SerialNumber`, `Chart`), but `Chart` uses ordinary `VARBINARY(MAX)` storage: SQL Server on Linux does not support FILESTREAM. Windows guests retain FILESTREAM. Existing databases are reused on retries. `ubu24` receives no SQL installation or SQL-specific extension.
+
+All six guests receive:
+
+- **Compute baseline auditing:** stable Windows/Linux Azure compute security baseline policies include Arc machines and exclude the Azure host. Their effect is `AuditIfNotExists`; findings are reported without denial, automatic hardening, or remediation. A real NonCompliant report is valid audit evidence, not deployment failure or a claim that the VM meets every baseline setting.
+- **Change Tracking and Inventory:** AMA plus the platform-specific Change Tracking extension sends software/service inventory and changes to the existing Log Analytics workspace. File-content and registry collection are disabled; bootstrap scripts and secrets are not collected.
+- **Monitoring:** an additional `<prefix>-monitor` Azure Monitor workspace receives native AMA OpenTelemetry host metrics. Separate DCRs collect Windows System/Application warnings/errors and Linux daemon/syslog/user warnings/errors in Log Analytics. Existing classic VM Insights and SQL assessment/Defender consumers remain intact. No separate OTel Collector, application tracing, or Grafana is installed.
+- **SSH:** Windows uses the `Microsoft.Azure.OpenSSH` / `WindowsOpenSSH` Arc extension; Ubuntu uses its native SSH service. Arc HybridConnectivity endpoints enable SSH without opening public Azure SSH ports. The provisioning user's existing SSH key is also authorized on Windows, with administrator-only/SYSTEM access to the Windows authorized-key file.
+
+Windows activation selects a public KMS client key for the installed Windows version and edition, including the previously omitted `win22sql22`, and verifies actual Windows licensing state. This does not change SQL licensing, convert editions, enroll ESUs, or establish licensing entitlement.
+
+Guest startup memory totals **24 GB** on the 32-GB client. Deployed checks require more than 2 GB of available host memory during concurrent queries against all five SQL guests; do not increase both Ubuntu guests to 4 GB without rebudgeting. Log Analytics ingestion/retention, Machine Configuration, and other enabled Azure services can incur charges. Review current Azure pricing and existing subscription plans; this deployment does not add a Defender plan or SQL PAYG.
+
+Deployed Pester checks require real baseline reports, per-machine inventory/change records, OS logs, and fresh CPU/memory/disk/network OTel metrics, not just successful extensions. Temporary `ArcBoxInventoryProbe...` services generate non-secret changes and are removed after the check. In Log Analytics, inspect `Heartbeat`, `ConfigurationData`, `ConfigurationChange`, `Event`, and `Syslog`, filtering `_ResourceId` to the relevant Arc machine. Query native OTel metrics in the Azure Monitor workspace using PromQL, for example `{"system.memory.usage"}`; filter the quoted `"Microsoft.resourceid"` label to select a machine. Noncompliance, missing telemetry, and extension failures must be distinguished.
+
+Local mocked coverage is not proof of clean deployment. Clean-deployment results are recorded separately after running the deployed checks.
+
 ### SQL installation modes and Software Assurance
 
 Select the mode from the first ITPro provisioning menu, or configure it **before creating a new ITPro lab**. For Evaluation on SQL 2016/2019/2025:
@@ -146,9 +178,9 @@ Select the mode from the first ITPro provisioning menu, or configure it **before
 azd env set JS_NESTED_SQL_MODE Evaluation
 ```
 
-`JS_NESTED_SQL_MODE` controls only SQL 2016/2019/2025. `JS_SQL_SERVER_EDITION` still controls only the prebuilt SQL 2022 guest and accepts `Developer`, `Standard`, or `Enterprise`; that selector does not offer Evaluation.
+`JS_NESTED_SQL_MODE` controls the additional Windows SQL 2016/2019/2025 guests and Ubuntu SQL 2025. `JS_SQL_SERVER_EDITION` still controls only the prebuilt SQL 2022 guest and accepts `Developer`, `Standard`, or `Enterprise`; that selector does not offer Evaluation.
 
-**Publish or select the matching artifact branch before deploying Evaluation.** Running a feature-branch checkout does not change the default `JS_GITHUB_BRANCH=main` used for VM downloads. The Evaluation preprovision check compares the published Bootstrap, logon script, SQL installer, and ITPro deployed checks against the local checkout (ignoring CRLF/LF differences), and stops before Azure operations if they differ or cannot be fetched. Set `JS_GITHUB_BRANCH` to the branch where those scripts have been published, or publish them to the configured branch first. The check verifies the current published content; do not change that branch while provisioning is in progress.
+**Publish or select the matching artifact branch before deploying Evaluation.** Running a feature-branch checkout does not change the default `JS_GITHUB_BRANCH=main` used for VM downloads. The Evaluation preprovision check compares the published Bootstrap, logon script, Windows/Linux SQL installers, server-management helper, ITPro VM DSC, and ITPro deployed checks against the local checkout (ignoring CRLF/LF differences), and stops before Azure operations if they differ or cannot be fetched. Set `JS_GITHUB_BRANCH` to the branch where those scripts have been published, or publish them to the configured branch first. The check verifies the current published content; do not change that branch while provisioning is in progress.
 
 If a lab installed Developer despite an Evaluation selection, inspect both the deployed `nestedSqlMode` parameter and the artifact `githubBranch`: older published scripts can ignore a newer local template's input and their older checks can still report success. Correcting the source branch does **not** change existing guest editions or replace scripts already downloaded. Do not rerun Bootstrap to repair this; it performs initial disk/setup operations. Recreating affected SQL guests or rebuilding the lab requires a separate, explicitly approved recovery plan; manual licensed conversion is another option when entitled.
 
@@ -250,7 +282,7 @@ Compile the wrapper with `az bicep build --file bicep/main.azd.bicep`. This does
 Run the mocked lifecycle tests with Pester 5.6 or later:
 
 ```powershell
-Invoke-Pester -Path hooks/tests/azd.tests.ps1 -Output Detailed
+Invoke-Pester -Path .\hooks\tests -Output Detailed
 ```
 
 On Windows, this suite also tests the full bootstrap command with Windows PowerShell's native `-File` argument binding, using only the real bootstrap parameter block. It never executes the VM setup body.

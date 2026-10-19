@@ -20,6 +20,46 @@ param azureMachineConfigurationPrerequisitePolicyId string = '/providers/Microso
 
 param tagsRoleDefinitionId string = '/subscriptions/${subscription().subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c'
 
+var computeBaselines = [
+  {
+    name: 'ArcBox-WindowsBaseline'
+    definition: '72650e9f-97bc-4b2a-ab5f-9781a9fcecbc'
+  }
+  {
+    name: 'ArcBox-LinuxBaseline'
+    definition: 'fc9b3da7-8347-4380-8e70-0a0361d8dedd'
+  }
+]
+
+resource computeBaselineAssignments 'Microsoft.Authorization/policyAssignments@2025-01-01' = [for baseline in computeBaselines: if (flavor == 'ITPro') {
+  name: baseline.name
+  properties: {
+    displayName: '(ArcBox) ${baseline.name} audit'
+    policyDefinitionId: tenantResourceId('Microsoft.Authorization/policyDefinitions', baseline.definition)
+    parameters: {
+      IncludeArcMachines: {
+        value: 'true'
+      }
+      effect: {
+        value: 'AuditIfNotExists'
+      }
+    }
+    resourceSelectors: [
+      {
+        name: 'ArcServersOnly'
+        selectors: [
+          {
+            kind: 'resourceType'
+            in: [
+              'Microsoft.HybridCompute/machines'
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}]
+
 var policies = [
   {
     name: '(ArcBox) Enable Azure Monitor for Hybrid VMs with AMA'

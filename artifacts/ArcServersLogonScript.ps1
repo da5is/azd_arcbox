@@ -16,6 +16,9 @@ $azureLocation = $env:azureLocation
 $resourceGroup = $env:resourceGroup
 $resourceTags = $env:resourceTags
 $namingPrefix = $env:namingPrefix
+if ($env:flavor -eq 'ITPro') {
+    . "$env:ArcBoxDir\ArcBoxServerManagement.ps1"
+}
 
 function Set-ArcBoxWindowsGuestPassword {
     param(
@@ -364,6 +367,9 @@ if ($Env:flavor -ne 'DevOps') {
     # Restarting Windows VM Network Adapters
     Write-Host 'Restarting Network Adapters'
     $winCreds = Set-ArcBoxWindowsGuestPassword -VMName $SQLvmName -Password $nestedGuestPassword
+    if ($env:flavor -eq 'ITPro') {
+        Set-ArcBoxWindowsActivation -VMName $SQLvmName -Credential $winCreds
+    }
     Start-Sleep -Seconds 5
     Invoke-Command -VMName $SQLvmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
     Start-Sleep -Seconds 20
@@ -575,11 +581,12 @@ if ($Env:flavor -ne 'DevOps') {
 
         $Win25Sql25vmName = 'win25sql25'
 
-        $Ubuntu01vmName = "$namingPrefix-Ubuntu-01"
+        $Ubuntu01vmName = 'ubu24sql25'
         $Ubuntu01vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Ubuntu-01.vhdx"
 
-        $Ubuntu02vmName = "$namingPrefix-Ubuntu-02"
+        $Ubuntu02vmName = 'ubu24'
         $Ubuntu02vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Ubuntu-02.vhdx"
+        $UbuntuVMNames = @($Ubuntu01vmName, $Ubuntu02vmName)
 
         $files = 'ArcBox-Win2K19.vhdx;ArcBox-Win2K22.vhdx;ArcBox-Win2K25.vhdx;ArcBox-Ubuntu-01.vhdx;ArcBox-Ubuntu-02.vhdx;'
 
@@ -678,33 +685,23 @@ if ($Env:flavor -ne 'DevOps') {
         # Automatically accept unseen keys but will refuse connections for changed or invalid hostkeys.
         Add-Content -Path "$Env:USERPROFILE\.ssh\config" -Value 'StrictHostKeyChecking=accept-new'
 
-        Get-VM *Ubuntu* | Wait-VM -For Heartbeat -Timeout 600 -ErrorAction Stop
-        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$Env:TEMP\authorized_keys" -DestinationPath "/home/$nestedLinuxUsername/.ssh" -FileSource Host -Force -CreateFullPath -ErrorAction Stop
+        Get-VM -Name $UbuntuVMNames | Wait-VM -For Heartbeat -Timeout 600 -ErrorAction Stop
+        Get-VM -Name $UbuntuVMNames | Copy-VMFile -SourcePath "$Env:TEMP\authorized_keys" -DestinationPath "/home/$nestedLinuxUsername/.ssh" -FileSource Host -Force -CreateFullPath -ErrorAction Stop
 
-        if ($namingPrefix -ne 'ArcBox') {
-
-            # Renaming the nested linux VMs
-            Write-Output 'Renaming the nested Linux VMs'
-
-            Invoke-Command -HostName $Ubuntu01VmIp -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername -ScriptBlock {
-
-                Invoke-Expression "sudo hostnamectl set-hostname $using:ubuntu01vmName;sudo systemctl reboot"
-
+        foreach ($guest in @(
+            @{ Name = $Ubuntu01vmName; IP = $Ubuntu01VmIp },
+            @{ Name = $Ubuntu02vmName; IP = $Ubuntu02VmIp }
+        )) {
+            Invoke-Command -HostName $guest.IP -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername -ArgumentList $guest.Name -ErrorAction Stop -ScriptBlock {
+                param([string]$Name)
+                sudo -n hostnamectl set-hostname $Name
+                if ($LASTEXITCODE -ne 0) { throw 'Could not rename the Ubuntu guest.' }
+                sudo -n systemctl enable --now ssh
+                if ($LASTEXITCODE -ne 0) { throw 'Could not enable Ubuntu OpenSSH.' }
             }
-
-            Restart-VM -Name $ubuntu01vmName -Force
-
-            Invoke-Command -HostName $Ubuntu02VmIp -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername -ScriptBlock {
-
-                Invoke-Expression "sudo hostnamectl set-hostname $using:ubuntu02vmName;sudo systemctl reboot"
-
-            }
-
-            Restart-VM -Name $ubuntu02vmName -Force
-
         }
 
-        Get-VM *Ubuntu* | Wait-VM -For IPAddress -Timeout 600 -ErrorAction Stop
+        Get-VM -Name $UbuntuVMNames | Wait-VM -For IPAddress -Timeout 600 -ErrorAction Stop
 
         Write-Host 'Waiting for the nested Linux VMs to come back online...waiting for 10 seconds'
 
@@ -770,36 +767,12 @@ if ($Env:flavor -ne 'DevOps') {
         # Copy installation script to nested Linux VMs
         Write-Output 'Transferring installation script to nested Linux VMs...'
 
-        Get-VM *Ubuntu* | Copy-VMFile -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername" -FileSource Host -Force -ErrorAction Stop
+        Get-VM -Name $UbuntuVMNames | Copy-VMFile -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername" -FileSource Host -Force -ErrorAction Stop
 
         Write-Output 'Activating operating system on Windows VMs...'
-
-        Invoke-Command -VMName $Win19Sql16vmName -ScriptBlock {
-
-            cscript C:\Windows\system32\slmgr.vbs -ipk WMDGN-G9PQG-XVVXX-R3X43-63DFG
-            cscript C:\Windows\system32\slmgr.vbs -skms kms.core.windows.net
-            cscript C:\Windows\system32\slmgr.vbs -ato
-            cscript C:\Windows\system32\slmgr.vbs -dlv
-
-        } -Credential $winCreds
-
-        Invoke-Command -VMName $Win22Sql19vmName -ScriptBlock {
-
-            cscript C:\Windows\system32\slmgr.vbs -ipk VDYBN-27WPP-V4HQT-9VMD4-VMK7H
-            cscript C:\Windows\system32\slmgr.vbs -skms kms.core.windows.net
-            cscript C:\Windows\system32\slmgr.vbs -ato
-            cscript C:\Windows\system32\slmgr.vbs -dlv
-
-        } -Credential $winCreds
-
-        Invoke-Command -VMName $Win25Sql25vmName -ScriptBlock {
-
-            cscript C:\Windows\system32\slmgr.vbs -ipk D764K-2NDRG-47T6Q-P8T8W-YP6DF
-            cscript C:\Windows\system32\slmgr.vbs -skms kms.core.windows.net
-            cscript C:\Windows\system32\slmgr.vbs -ato
-            cscript C:\Windows\system32\slmgr.vbs -dlv
-
-        } -Credential $winCreds
+        foreach ($vmName in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
+            Set-ArcBoxWindowsActivation -VMName $vmName -Credential $winCreds
+        }
 
         Write-Header 'Onboarding Arc-enabled servers'
 
@@ -826,6 +799,41 @@ if ($Env:flavor -ne 'DevOps') {
             }
         } -ArgumentList $nestedGuestPassword -ErrorAction Stop
         Invoke-JSSudoCommand -Session $UbuntuSessions -Command "sh /home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"
+
+        Write-Header 'Installing SQL Server 2025 on ubu24sql25'
+        $null = Update-AzTag -ResourceId "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -Operation Merge -Tag @{ DeploymentProgress = 'Installing SQL Server 2025 on ubu24sql25' } -ErrorAction Stop
+        Copy-VMFile -Name $Ubuntu01vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServerUbuntu.sh" -DestinationPath "/home/$nestedLinuxUsername" -FileSource Host -Force -ErrorAction Stop
+        $sqlSession = $UbuntuSessions | Where-Object ComputerName -eq $Ubuntu01VmIp
+        if ($null -eq $sqlSession) { throw 'The Ubuntu SQL guest session is missing.' }
+        Invoke-Command -Session $sqlSession -ArgumentList $nestedGuestPassword, $sqlMode -ErrorAction Stop -ScriptBlock {
+            param([string]$Password, [string]$Mode)
+            $Password | sudo -n timeout --kill-after=30s 90m bash /home/jumpstart/InstallNestedSqlServerUbuntu.sh $Mode
+            if ($LASTEXITCODE -ne 0) { throw "Ubuntu SQL setup failed (exit code $LASTEXITCODE)." }
+        }
+        Install-ArcBoxServerExtension -MachineName $Ubuntu01vmName -Name 'LinuxAgent.SqlServer' -Publisher 'Microsoft.AzureData' -Settings @{
+            LicenseType = 'LicenseOnly'
+            SqlManagement = @{ IsEnabled = $true }
+        }
+        $null = Update-AzTag -ResourceId "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -Operation Merge -Tag @{ DeploymentProgress = 'Configuring Arc inventory, SSH and OpenTelemetry' } -ErrorAction Stop
+        Set-ArcBoxServerManagement -WindowsMachines @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName) -LinuxMachines $UbuntuVMNames
+        $sshPublicKey = Get-Content "$Env:USERPROFILE\.ssh\id_rsa.pub" -Raw -ErrorAction Stop
+        Invoke-Command -VMName @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName) -Credential $winCreds -ArgumentList $sshPublicKey -ErrorAction Stop -ScriptBlock {
+            param([string]$PublicKey)
+            $ErrorActionPreference = 'Stop'
+            $path = "$env:ProgramData\ssh\administrators_authorized_keys"
+            if (-not (Test-Path -LiteralPath $path) -or (Get-Content -LiteralPath $path) -notcontains $PublicKey.Trim()) {
+                Add-Content -LiteralPath $path -Value $PublicKey.Trim() -Encoding ascii
+            }
+            $acl = [System.Security.AccessControl.FileSecurity]::new()
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+                $identity = [System.Security.Principal.SecurityIdentifier]::new($sid)
+                $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($identity, 'FullControl', 'Allow'))
+            }
+            Set-Acl -LiteralPath $path -AclObject $acl
+            Set-Service sshd -StartupType Automatic
+            Start-Service sshd
+        }
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'
         $VMs = @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)

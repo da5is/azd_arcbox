@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "3140738538828754840"
+      "templateHash": "18150836867297116166"
     }
   },
   "parameters": {
@@ -465,6 +465,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+        "[extensionResourceId(resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Monitoring Data Reader'))]",
         "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Microsoft.Authorization/roleAssignments', 'Administrator'))]",
         "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Microsoft.Authorization/roleAssignments', 'Owner'))]",
         "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Microsoft.Authorization/roleAssignments', 'Storage Blob Data Contributor'))]"
@@ -513,6 +514,21 @@
         "principalId": "[reference(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), '2024-07-01', 'full').identity.principalId]",
         "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
         "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ]
+    },
+    {
+      "condition": "[equals(parameters('flavor'), 'ITPro')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Monitor/accounts', format('{0}-monitor', parameters('namingPrefix')))]",
+      "name": "[guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Monitoring Data Reader')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), '2024-07-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b0d8363b-8ddd-447d-831f-62ca05bff136')]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"

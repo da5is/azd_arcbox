@@ -51,15 +51,15 @@ properties:
         EnableGuestService: true
         SecureBoot: true
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-Ubuntu-01
+      id: ubu24sql25
       directives:
-        description: Configure VM namingPrefixStage-Ubuntu-01
+        description: Configure VM ubu24sql25
       settings:
-        Name: namingPrefixStage-Ubuntu-01
+        Name: ubu24sql25
         SwitchName: 'InternalNATSwitch'
         VhdPath: F:\Virtual Machines\namingPrefixStage-Ubuntu-01.vhdx
         ProcessorCount: 2
-        StartupMemory: '2GB'
+        StartupMemory: '4GB'
         RestartIfNeeded: true
         State: Running
         Generation: 2
@@ -67,11 +67,11 @@ properties:
         EnableGuestService: true
         SecureBoot: false
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-Ubuntu-02
+      id: ubu24
       directives:
-        description: Configure VM namingPrefixStage-Ubuntu-02
+        description: Configure VM ubu24
       settings:
-        Name: namingPrefixStage-Ubuntu-02
+        Name: ubu24
         SwitchName: 'InternalNATSwitch'
         VhdPath: F:\Virtual Machines\namingPrefixStage-Ubuntu-02.vhdx
         ProcessorCount: 2
