@@ -141,6 +141,12 @@ Describe 'Arc extension provisioning safeguards' {
     It 'rejects telemetry checks without a unique current-run change probe' {
         { Wait-ArcBoxServerTelemetry -MachineNames ubu24 } | Should -Throw '*unique ArcBoxInventoryProbe*'
     }
+    It 'queries native OTel metric names explicitly rather than an unsupported wildcard selector' {
+        $source = Get-Content (Join-Path $root 'artifacts\ArcBoxServerManagement.ps1') -Raw
+        $source | Should -Not -Match '__name__=~'
+        $source | Should -Match "system.cpu.time', 'system.memory.usage', 'system.disk.io', 'system.network.io"
+        $source | Should -Match 'Get-ArcBoxOtelMetrics -Query "\{`"\$metricName`"\}"'
+    }
 }
 
 Describe 'Six-machine management orchestration' {
@@ -311,6 +317,11 @@ Describe 'ITPro management infrastructure and naming' {
         $source | Should -Match '(?s)vmBootstrap.*?dependsOn: \[.*?vmMetricsReader'
         $source | Should -Match '(?s)resource vmMetricsReader.*?scope: metricsWorkspace'
     }
+    It 'allows guest SSH on any network profile only from the internal lab subnet' {
+        $source = Get-Content (Join-Path $root 'artifacts\ArcServersLogonScript.ps1') -Raw
+        $source | Should -Match "New-NetFirewallRule -Name 'ArcBox-SSH'[^\r\n]+-Profile Any -Protocol TCP -LocalPort 22 -RemoteAddress '10.10.1.0/24'"
+        $source | Should -Match "Set-NetFirewallRule[^\r\n]+-Profile Any -Protocol TCP -LocalPort 22 -RemoteAddress '10.10.1.0/24'"
+    }
     It 'installs the Log Analytics query module explicitly for ITPro' {
         $source = Get-Content (Join-Path $root 'artifacts\Bootstrap.ps1') -Raw
         $source | Should -Match '(?s)if \(\$flavor -eq "ITPro"\) \{\s+\$modules \+= "Az.OperationalInsights"'
@@ -372,6 +383,31 @@ Describe 'Ubuntu SQL sample parity and installer contracts' {
         $source | Should -Match 'MSSQL_PID=EnterpriseDeveloper'
         $source | Should -Match 'Developer\|Evaluation'
         $source | Should -Match "ProductMajorVersion.*<> 17"
+    }
+
+    Describe 'Linux SQL configured memory verification' {
+        BeforeAll {
+            $source = Get-Content (Join-Path $root 'artifacts\tests\itpro.tests.ps1') -Raw
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
+            $assignment = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                    $node.Left.Extent.Text -eq '$memory' -and $node.Right.Extent.Text -match 'configparser'
+            }, $true)
+            $guard = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.IfStatementAst] -and
+                    $node.Extent.Text -match 'Linux SQL memory limit is not 2048 MB'
+            }, $true)
+            $check = [scriptblock]::Create("$($assignment.Extent.Text)`n$($guard.Extent.Text)")
+            function sudo { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) throw 'Unexpected memory query.' }
+        }
+        It 'accepts only the exact configured 2048-MB value' {
+            Mock sudo { $global:LASTEXITCODE = 0; '2048' }
+            { & $check } | Should -Not -Throw
+            Mock sudo { $global:LASTEXITCODE = 0; '20480' }
+            { & $check } | Should -Throw '*not 2048 MB*'
+        }
     }
     It 'receives the secret on stdin and enforces bounded setup and SQL memory' {
         $source | Should -Match 'IFS= read -r MSSQL_SA_PASSWORD'

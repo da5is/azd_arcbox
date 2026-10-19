@@ -275,9 +275,13 @@ function Wait-ArcBoxServerTelemetry {
     $deadline = (Get-Date).AddMinutes(60)
     do {
         $missing = [System.Collections.Generic.List[string]]::new()
-        $metrics = if (-not $InventoryOnly) {
-            @(Get-ArcBoxOtelMetrics -Query '{__name__=~"system[._](cpu[._]time|memory[._]usage|disk[._]io|network[._]io).*"}')
-        } else { @() }
+        $metricNames = @('system.cpu.time', 'system.memory.usage', 'system.disk.io', 'system.network.io')
+        $metrics = @()
+        if (-not $InventoryOnly) {
+            foreach ($metricName in $metricNames) {
+                $metrics += @(Get-ArcBoxOtelMetrics -Query "{`"$metricName`"}")
+            }
+        }
         foreach ($machine in $MachineNames) {
             $id = "/subscriptions/$env:subscriptionId/resourcegroups/$env:resourceGroup/providers/microsoft.hybridcompute/machines/$machine".ToLowerInvariant()
             $tables = if ($InventoryOnly) { @('Heartbeat', 'ConfigurationData') } else { @('Heartbeat', 'ConfigurationData', 'ConfigurationChange') }
@@ -290,9 +294,9 @@ function Wait-ArcBoxServerTelemetry {
             $osLog = if ($machine -in @('ubu24sql25', 'ubu24')) { 'Syslog' } else { 'Event' }
             $rows = @(Invoke-ArcBoxLogQuery -WorkspaceId $workspace.CustomerId -Query "union isfuzzy=true $osLog, (datatable(TimeGenerated:datetime, _ResourceId:string)[]) | where TimeGenerated > ago(2h) | where tolower(_ResourceId) == '$id' | take 1")
             if ($rows.Count -eq 0) { $missing.Add("$machine/$osLog") }
-            foreach ($metric in @('cpu[._]time', 'memory[._]usage', 'disk[._]io', 'network[._]io')) {
+            foreach ($metric in $metricNames) {
                 $samples = @($metrics | Where-Object {
-                    $_.metric.__name__ -match "^system[._]$metric" -and
+                    $_.metric.__name__ -eq $metric -and
                     @($_.metric.PSObject.Properties | Where-Object Value -IEQ $id).Count -gt 0 -and
                     [double]$_.value[0] -gt [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeSeconds()
                 })

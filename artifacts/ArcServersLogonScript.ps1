@@ -841,6 +841,12 @@ if ($Env:flavor -ne 'DevOps') {
             Set-Acl -LiteralPath $path -AclObject $acl
             Set-Service sshd -StartupType Automatic
             Start-Service sshd
+            $sshRule = Get-NetFirewallRule -Name 'ArcBox-SSH' -ErrorAction SilentlyContinue
+            if ($null -eq $sshRule) {
+                New-NetFirewallRule -Name 'ArcBox-SSH' -DisplayName 'ArcBox SSH from lab subnet' -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort 22 -RemoteAddress '10.10.1.0/24' | Out-Null
+            } else {
+                $sshRule | Set-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort 22 -RemoteAddress '10.10.1.0/24'
+            }
         }
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'
