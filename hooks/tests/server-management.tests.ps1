@@ -192,7 +192,7 @@ Describe 'Six-machine management orchestration' {
 
 Describe 'Explicit audit baseline guest assignment' {
     It 'creates missing audit assignments from built-in metadata without applying settings' {
-        Mock Invoke-ArcBoxServerAz { '{"value":[]}' } -ParameterFilter { $Arguments[0] -eq 'rest' }
+        Mock Get-ArcBoxBaselineAssignment { $null }
         Mock Invoke-ArcBoxServerAz {
             '{"metadata":{"guestConfiguration":{"name":"AzureWindowsBaseline","version":"1.*","configurationParameter":{"BaselineSettings":"AzureWindowsBaseline;BaselineSettings"}}},"parameters":{"BaselineSettings":{"defaultValue":"built-in-defaults"}}}'
         } -ParameterFilter { $Arguments[0] -eq 'policy' }
@@ -206,10 +206,24 @@ Describe 'Explicit audit baseline guest assignment' {
         Should -Invoke Invoke-AzRestMethod -Exactly -Times 1
     }
     It 'preserves existing baseline assignments' {
-        Mock Invoke-ArcBoxServerAz { '{"value":[{"name":"AzureWindowsBaseline"}]}' }
+        Mock Get-ArcBoxBaselineAssignment { @{ name = 'AzureWindowsBaseline' } }
         Mock Invoke-AzRestMethod { throw 'Must not replace an existing assignment.' }
         Set-ArcBoxBaselineAudit -MachineName win22sql22 -OS Windows
         Should -Invoke Invoke-AzRestMethod -Times 0
+    }
+    It 'reads the actual per-machine report instead of a collection that omits explicit assignments' {
+        Mock Invoke-AzRestMethod { @{ StatusCode = 200; Content = '{"name":"AzureWindowsBaseline","properties":{"complianceStatus":"NonCompliant"}}' } }
+        Mock Invoke-ArcBoxServerAz { throw 'Must not use the incomplete assignment collection.' }
+        Wait-ArcBoxBaselineReport -MachineName win19sql16 -OS Windows | Should -Be 'NonCompliant'
+        Should -Invoke Invoke-AzRestMethod -Exactly -Times 1 -ParameterFilter { $Method -eq 'GET' -and $Path -like '*/guestConfigurationAssignments/AzureWindowsBaseline?api-version=*' }
+    }
+    It 'treats only an actual 404 as a missing assignment' {
+        Mock Invoke-AzRestMethod { @{ StatusCode = 404 } }
+        Get-ArcBoxBaselineAssignment -MachineName win19sql16 -OS Windows | Should -BeNullOrEmpty
+        Mock Invoke-AzRestMethod { @{ StatusCode = 403 } }
+        { Get-ArcBoxBaselineAssignment -MachineName win19sql16 -OS Windows } | Should -Throw '*HTTP 403*'
+        Mock Invoke-AzRestMethod { throw 'Transport unavailable' }
+        { Get-ArcBoxBaselineAssignment -MachineName win19sql16 -OS Windows } | Should -Throw '*Transport unavailable*'
     }
 }
 

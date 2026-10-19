@@ -183,8 +183,7 @@ function Set-ArcBoxBaselineAudit {
 
     $machineId = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName"
     $assignmentPath = "$machineId/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments"
-    $assignments = (Invoke-ArcBoxServerAz -Arguments @('rest', '--method', 'get', '--url', "https://management.azure.com${assignmentPath}?api-version=2024-04-05", '--output', 'json') | ConvertFrom-Json).value
-    if (@($assignments | Where-Object name -eq "Azure${OS}Baseline").Count -gt 0) { return }
+    if ($null -ne (Get-ArcBoxBaselineAssignment -MachineName $MachineName -OS $OS)) { return }
 
     $definitionId = if ($OS -eq 'Windows') { '72650e9f-97bc-4b2a-ab5f-9781a9fcecbc' } else { 'fc9b3da7-8347-4380-8e70-0a0361d8dedd' }
     $definition = Invoke-ArcBoxServerAz -Arguments @('policy', 'definition', 'show', '--name', $definitionId, '--output', 'json') | ConvertFrom-Json
@@ -210,15 +209,35 @@ function Set-ArcBoxBaselineAudit {
     if ($response.StatusCode -notin @(200, 201, 202)) { throw "Could not create the audit-only baseline assignment on '$MachineName' (HTTP $($response.StatusCode))." }
 }
 
+function Get-ArcBoxBaselineAssignment {
+    param([Parameter(Mandatory)][string]$MachineName, [Parameter(Mandatory)][ValidateSet('Windows', 'Linux')][string]$OS)
+
+    $path = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments/Azure${OS}Baseline?api-version=2024-04-05"
+    try {
+        $response = Invoke-AzRestMethod -Method GET -Path $path -ErrorAction Stop
+    } catch {
+        $httpResponse = $_.Exception.PSObject.Properties['Response']
+        if ($null -ne $httpResponse -and $null -ne $httpResponse.Value -and $httpResponse.Value.StatusCode -eq 404) {
+            Write-Host "No $OS audit baseline assignment exists yet on $MachineName."
+            return $null
+        }
+        throw
+    }
+    if ($response.StatusCode -eq 404) {
+        Write-Host "No $OS audit baseline assignment exists yet on $MachineName."
+        return $null
+    }
+    if ($response.StatusCode -ne 200) { throw "Could not read baseline assignment on '$MachineName' (HTTP $($response.StatusCode))." }
+    return $response.Content | ConvertFrom-Json
+}
+
 function Wait-ArcBoxBaselineReport {
     param([Parameter(Mandatory)][string]$MachineName, [Parameter(Mandatory)][ValidateSet('Windows', 'Linux')][string]$OS)
 
-    $url = "https://management.azure.com/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments?api-version=2024-04-05"
     $deadline = (Get-Date).AddMinutes(30)
     do {
-        $assignments = (Invoke-ArcBoxServerAz -Arguments @('rest', '--method', 'get', '--url', $url, '--output', 'json') | ConvertFrom-Json).value
-        $baseline = @($assignments | Where-Object { $_.name -eq "Azure${OS}Baseline" -and $_.properties.complianceStatus -in @('Compliant', 'NonCompliant') })
-        if ($baseline.Count -eq 1) { return $baseline[0].properties.complianceStatus }
+        $baseline = Get-ArcBoxBaselineAssignment -MachineName $MachineName -OS $OS
+        if ($baseline.properties.complianceStatus -in @('Compliant', 'NonCompliant')) { return $baseline.properties.complianceStatus }
         Write-Host "Waiting for an evaluated $OS baseline report on $MachineName."
         Start-Sleep -Seconds 30
     } while ((Get-Date) -lt $deadline)
