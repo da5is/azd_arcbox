@@ -168,7 +168,7 @@ Guest startup memory totals **24 GB** on the 32-GB client. Deployed checks requi
 
 Deployed Pester checks require real baseline reports, per-machine inventory/change records, OS logs, and fresh CPU/memory/disk/network OTel metrics, not just successful extensions. Temporary `ArcBoxInventoryProbe...` services generate non-secret changes and are removed after the check. In Log Analytics, inspect `Heartbeat`, `ConfigurationData`, `ConfigurationChange`, `Event`, and `Syslog`, filtering `_ResourceId` to the relevant Arc machine. Query native OTel metrics in the Azure Monitor workspace using PromQL, for example `{"system.memory.usage"}`; filter the quoted `"Microsoft.resourceid"` label to select a machine. Noncompliance, missing telemetry, and extension failures must be distinguished.
 
-Local mocked coverage is not proof of clean deployment. Clean-deployment results are recorded separately after running the deployed checks.
+The recovered six-guest ITPro lab passed **56 deployed checks**, including actual inventory/change records and OTel metrics from every guest, six SSH connections, baseline reports, SQL samples, Windows activation, and concurrent SQL-query memory headroom. The local regression suite passed **219 tests**. The user elected to stop before an additional clean rebuild, so these results validate the recovered lab, not an unattended clean deployment of every published fix.
 
 ### SQL installation modes and Software Assurance
 
