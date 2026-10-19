@@ -3,6 +3,37 @@ param namingPrefix string
 param workspaceId string
 param resourceTags object
 
+resource logWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: last(split(workspaceId, '/'))
+}
+
+resource changeTrackingSolution 'Microsoft.OperationsManagement/solutions@2015-11-01-preview' = {
+  name: 'ChangeTracking(${logWorkspace.name})'
+  location: location
+  properties: {
+    workspaceResourceId: workspaceId
+  }
+  plan: {
+    name: 'ChangeTracking(${logWorkspace.name})'
+    product: 'OMSGallery/ChangeTracking'
+    publisher: 'Microsoft'
+    promotionCode: ''
+  }
+}
+
+resource inventoryTables 'Microsoft.OperationalInsights/workspaces/tables@2023-09-01' = [for table in ['ConfigurationChange', 'ConfigurationData']: {
+  parent: logWorkspace
+  name: table
+  dependsOn: [
+    changeTrackingSolution
+  ]
+  properties: {
+    schema: {
+      name: table
+    }
+  }
+}]
+
 resource metricsWorkspace 'Microsoft.Monitor/accounts@2023-04-03' = {
   name: '${namingPrefix}-monitor'
   location: location
@@ -69,6 +100,9 @@ resource inventoryRule 'Microsoft.Insights/dataCollectionRules@2024-03-11' = {
   name: '${namingPrefix}-Inventory'
   location: location
   tags: resourceTags
+  dependsOn: [
+    inventoryTables
+  ]
   properties: {
     dataSources: {
       extensions: [for os in ['Windows', 'Linux']: {

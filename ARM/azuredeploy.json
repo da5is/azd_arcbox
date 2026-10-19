@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "2938783340952096110"
+      "templateHash": "10618759334577407717"
     }
   },
   "parameters": {
@@ -2268,7 +2268,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "12109992021007722052"
+              "templateHash": "7592347528279047392"
             }
           },
           "parameters": {
@@ -3063,7 +3063,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.48.1.52935",
-                      "templateHash": "14412141573739028995"
+                      "templateHash": "12248710425525502479"
                     }
                   },
                   "parameters": {
@@ -3088,6 +3088,38 @@
                     ]
                   },
                   "resources": [
+                    {
+                      "type": "Microsoft.OperationsManagement/solutions",
+                      "apiVersion": "2015-11-01-preview",
+                      "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "workspaceResourceId": "[parameters('workspaceId')]"
+                      },
+                      "plan": {
+                        "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                        "product": "OMSGallery/ChangeTracking",
+                        "publisher": "Microsoft",
+                        "promotionCode": ""
+                      }
+                    },
+                    {
+                      "copy": {
+                        "name": "inventoryTables",
+                        "count": "[length(createArray('ConfigurationChange', 'ConfigurationData'))]"
+                      },
+                      "type": "Microsoft.OperationalInsights/workspaces/tables",
+                      "apiVersion": "2023-09-01",
+                      "name": "[format('{0}/{1}', last(split(parameters('workspaceId'), '/')), createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()])]",
+                      "properties": {
+                        "schema": {
+                          "name": "[createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()]]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.OperationsManagement/solutions', format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/'))))]"
+                      ]
+                    },
                     {
                       "type": "Microsoft.Monitor/accounts",
                       "apiVersion": "2023-04-03",
@@ -3201,7 +3233,10 @@
                             ]
                           }
                         ]
-                      }
+                      },
+                      "dependsOn": [
+                        "inventoryTables"
+                      ]
                     },
                     {
                       "copy": {
@@ -6480,7 +6515,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "12109992021007722052"
+              "templateHash": "7592347528279047392"
             }
           },
           "parameters": {
@@ -7275,7 +7310,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.48.1.52935",
-                      "templateHash": "14412141573739028995"
+                      "templateHash": "12248710425525502479"
                     }
                   },
                   "parameters": {
@@ -7300,6 +7335,38 @@
                     ]
                   },
                   "resources": [
+                    {
+                      "type": "Microsoft.OperationsManagement/solutions",
+                      "apiVersion": "2015-11-01-preview",
+                      "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "workspaceResourceId": "[parameters('workspaceId')]"
+                      },
+                      "plan": {
+                        "name": "[format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/')))]",
+                        "product": "OMSGallery/ChangeTracking",
+                        "publisher": "Microsoft",
+                        "promotionCode": ""
+                      }
+                    },
+                    {
+                      "copy": {
+                        "name": "inventoryTables",
+                        "count": "[length(createArray('ConfigurationChange', 'ConfigurationData'))]"
+                      },
+                      "type": "Microsoft.OperationalInsights/workspaces/tables",
+                      "apiVersion": "2023-09-01",
+                      "name": "[format('{0}/{1}', last(split(parameters('workspaceId'), '/')), createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()])]",
+                      "properties": {
+                        "schema": {
+                          "name": "[createArray('ConfigurationChange', 'ConfigurationData')[copyIndex()]]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.OperationsManagement/solutions', format('ChangeTracking({0})', last(split(parameters('workspaceId'), '/'))))]"
+                      ]
+                    },
                     {
                       "type": "Microsoft.Monitor/accounts",
                       "apiVersion": "2023-04-03",
@@ -7413,7 +7480,10 @@
                             ]
                           }
                         ]
-                      }
+                      },
+                      "dependsOn": [
+                        "inventoryTables"
+                      ]
                     },
                     {
                       "copy": {

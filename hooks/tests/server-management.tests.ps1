@@ -144,6 +144,18 @@ Describe 'ITPro management infrastructure and naming' {
         $source | Should -Match 'enableFiles: false'
         $source | Should -Match 'enableRegistry: false'
     }
+    It 'activates the workspace solution and both tables before creating the inventory rule' {
+        $template = Get-Content (Join-Path $root 'ARM\mgmt\arcServerMonitoring.json') -Raw | ConvertFrom-Json
+        $solution = @($template.resources | Where-Object type -eq 'Microsoft.OperationsManagement/solutions')
+        $solution.Count | Should -Be 1
+        $solution[0].plan.product | Should -Be 'OMSGallery/ChangeTracking'
+        $tables = @($template.resources | Where-Object type -eq 'Microsoft.OperationalInsights/workspaces/tables')
+        $tables.Count | Should -Be 1
+        $tables[0].copy.count | Should -Be "[length(createArray('ConfigurationChange', 'ConfigurationData'))]"
+        ($tables[0].dependsOn -join '') | Should -Match 'Microsoft.OperationsManagement/solutions'
+        $inventory = $template.resources | Where-Object name -eq "[format('{0}-Inventory', parameters('namingPrefix'))]"
+        ($inventory.dependsOn -join '') | Should -Match 'inventoryTables'
+    }
     It 'budgets exactly 24 GB across the six named guests and retains source image names' {
         $source = Get-Content (Join-Path $root 'artifacts\dsc\virtual_machines_itpro.dsc.yml') -Raw
         $source | Should -Match '(?s)Name: ubu24sql25.*?VhdPath: [^\r\n]+Ubuntu-01\.vhdx.*?StartupMemory: ''4GB'''
