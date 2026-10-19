@@ -1252,7 +1252,7 @@ Describe 'ArcBox SQL installation modes' {
         $client.parameters.PSObject.Properties.Name | Should -Not -Contain nestedSqlByolEdition
         $hostSource = Get-Content (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1') -Raw
         ([regex]::Matches($hostSource, '-InstallationMode \$mode')).Count | Should -Be 2
-        $hostSource | Should -Match 'Install-ArcBoxSqlExtension -MachineName \$sqlVmName -LicenseType LicenseOnly'
+        $hostSource | Should -Match 'Install-ArcBoxSqlExtension -MachineName \$additionalSqlMachine -LicenseType LicenseOnly'
         $hostSource | Should -Not -Match 'ByolEdition|sqlGuestLicenseTypes|Installation\.json'
         $installer | Should -Not -Match 'LicenseType|''Paid''|Installation\.json'
     }

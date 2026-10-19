@@ -151,7 +151,9 @@ function Install-ArcBoxServerExtension {
 function Set-ArcBoxServerManagement {
     param([Parameter(Mandatory)][string[]]$WindowsMachines, [Parameter(Mandatory)][string[]]$LinuxMachines)
 
-    foreach ($machine in @($WindowsMachines) + @($LinuxMachines)) {
+    $machines = @($WindowsMachines) + @($LinuxMachines)
+    if (@($machines | Sort-Object -Unique).Count -ne $machines.Count) { throw 'Arc management requires unique machine names; refusing to skip a guest through duplicate targets.' }
+    foreach ($machine in $machines) {
         $os = if ($WindowsMachines -contains $machine) { 'Windows' } else { 'Linux' }
         Install-ArcBoxServerExtension -MachineName $machine -Name "AzureMonitor${os}Agent" -Publisher 'Microsoft.Azure.Monitor'
         Install-ArcBoxServerExtension -MachineName $machine -Name "ChangeTracking-$os" -Publisher 'Microsoft.Azure.ChangeTrackingAndInventory'

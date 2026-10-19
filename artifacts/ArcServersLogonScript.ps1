@@ -785,8 +785,8 @@ if ($Env:flavor -ne 'DevOps') {
         } -Credential $winCreds -ErrorAction Stop
 
         Write-Header 'Installing SQL Server extensions on Arc-enabled Windows VMs'
-        foreach ($sqlVmName in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
-            Install-ArcBoxSqlExtension -MachineName $sqlVmName -LicenseType LicenseOnly
+        foreach ($additionalSqlMachine in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
+            Install-ArcBoxSqlExtension -MachineName $additionalSqlMachine -LicenseType LicenseOnly
         }
 
         Write-Output 'Onboarding the nested Linux VMs as an Azure Arc-enabled servers'

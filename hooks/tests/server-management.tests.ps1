@@ -8,6 +8,7 @@ BeforeAll {
     function Invoke-AzRestMethod { param($Method, $Path, $Payload) throw 'Unexpected Azure REST call.' }
     function cscript.exe { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) throw 'Unexpected activation call.' }
     function Copy-VMFile { param($Name, $SourcePath, $DestinationPath, $FileSource, [switch]$Force, [switch]$CreateFullPath) throw 'Unexpected Hyper-V file copy.' }
+    function Install-ArcBoxSqlExtension { param($MachineName, $LicenseType) throw 'Unexpected SQL extension call.' }
 }
 
 Describe 'Windows KMS version and edition selection' {
@@ -154,6 +155,36 @@ Describe 'Six-machine management orchestration' {
         Should -Invoke Install-ArcBoxServerExtension -Times 6 -Exactly -ParameterFilter { $Name -like 'ChangeTracking-*' }
         Should -Invoke Invoke-ArcBoxServerAz -Times 18 -Exactly
         Should -Invoke Invoke-AzRestMethod -Times 12 -Exactly
+    }
+    It 'rejects duplicate targets before making any cloud changes' {
+        Mock Install-ArcBoxServerExtension {}
+        { Set-ArcBoxServerManagement -WindowsMachines @('win25sql25', 'win19sql16', 'win22sql19', 'win25sql25') -LinuxMachines @('ubu24sql25', 'ubu24') } | Should -Throw '*unique machine names*'
+        Should -Invoke Install-ArcBoxServerExtension -Times 0
+    }
+    It 'preserves the prebuilt SQL target through the actual caller loop and management invocation' {
+        $source = Get-Content (Join-Path $root 'artifacts\ArcServersLogonScript.ps1') -Raw
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
+        $loop = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.ForEachStatementAst] -and $node.Body.Extent.Text -match 'Install-ArcBoxSqlExtension'
+        }, $true)
+        $management = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Set-ArcBoxServerManagement'
+        }, $true)
+        $SQLvmName = 'win22sql22'
+        $Win19Sql16vmName = 'win19sql16'
+        $Win22Sql19vmName = 'win22sql19'
+        $Win25Sql25vmName = 'win25sql25'
+        $UbuntuVMNames = @('ubu24sql25', 'ubu24')
+        Mock Install-ArcBoxSqlExtension {}
+        Mock Set-ArcBoxServerManagement { $script:actualTargets = @($WindowsMachines) + @($LinuxMachines) }
+        & ([scriptblock]::Create($loop.Extent.Text))
+        & ([scriptblock]::Create($management.Extent.Text))
+        $SQLvmName | Should -BeExactly 'win22sql22'
+        $script:actualTargets.Count | Should -Be 6
+        @($script:actualTargets | Sort-Object -Unique).Count | Should -Be 6
+        $script:actualTargets | Should -Contain 'win22sql22'
     }
 }
 
