@@ -162,6 +162,10 @@ Describe 'ITPro management infrastructure and naming' {
         $source | Should -Match '(?s)vmBootstrap.*?dependsOn: \[.*?vmMetricsReader'
         $source | Should -Match '(?s)resource vmMetricsReader.*?scope: metricsWorkspace'
     }
+    It 'installs the Log Analytics query module explicitly for ITPro' {
+        $source = Get-Content (Join-Path $root 'artifacts\Bootstrap.ps1') -Raw
+        $source | Should -Match '(?s)if \(\$flavor -eq "ITPro"\) \{\s+\$modules \+= "Az.OperationalInsights"'
+    }
 }
 
 Describe 'Ubuntu SQL sample parity and installer contracts' {
