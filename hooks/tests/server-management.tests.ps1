@@ -229,7 +229,7 @@ Describe 'ITPro management infrastructure and naming' {
         $sum | Should -Be 24
         $logon = Get-Content (Join-Path $root 'artifacts\ArcServersLogonScript.ps1') -Raw
         $logon | Should -Not -Match 'Get-VM \*Ubuntu\*'
-        $logon | Should -Match 'sudo -n hostnamectl set-hostname \$Name'
+        $logon | Should -Match 'sudo -n hostnamectl set-hostname \$Name 2>&1'
         $logon | Should -Match 'Install-ArcBoxServerExtension -MachineName \$Ubuntu01vmName -Name ''LinuxAgent.SqlServer'''
         $logon | Should -Not -Match 'Install-ArcBoxServerExtension -MachineName \$Ubuntu02vmName -Name ''LinuxAgent.SqlServer'''
     }
@@ -241,6 +241,36 @@ Describe 'ITPro management infrastructure and naming' {
     It 'installs the Log Analytics query module explicitly for ITPro' {
         $source = Get-Content (Join-Path $root 'artifacts\Bootstrap.ps1') -Raw
         $source | Should -Match '(?s)if \(\$flavor -eq "ITPro"\) \{\s+\$modules \+= "Az.OperationalInsights"'
+    }
+}
+
+Describe 'Linux native stderr over PowerShell remoting' {
+    BeforeAll {
+        $source = Get-Content (Join-Path $root 'artifacts\ArcServersLogonScript.ps1') -Raw
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
+        $rename = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+                $node.ScriptBlock.Extent.Text -match 'param\(\[string\]\$Name\)' -and
+                $node.ScriptBlock.Extent.Text -match 'hostnamectl'
+        }, $true)
+        $renameScript = [scriptblock]::Create($rename.ScriptBlock.Extent.Text.Trim().TrimStart('{').TrimEnd('}'))
+        function sudo {
+            param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+            Write-Error 'Synchronizing state of ssh.service with SysV service script.' -ErrorAction Continue
+            $global:LASTEXITCODE = 0
+        }
+    }
+    It 'does not treat informational stderr with exit zero as remote failure' {
+        { $ErrorActionPreference = 'Stop'; & $renameScript ubu24sql25 } | Should -Not -Throw
+    }
+    It 'still rejects an actual SSH enable failure' {
+        Mock sudo { $global:LASTEXITCODE = if ($Arguments -contains 'systemctl') { 1 } else { 0 } }
+        { & $renameScript ubu24sql25 } | Should -Throw '*Could not enable Ubuntu OpenSSH*'
+    }
+    It 'merges installer and onboarding stderr while explicitly checking native exit codes' {
+        $source | Should -Match '(?m)InstallNestedSqlServerUbuntu.sh \$Mode 2>&1 \| ForEach-Object'
+        $source | Should -Match 'Linux Arc onboarding failed \(exit code \$LASTEXITCODE\)'
     }
 }
 

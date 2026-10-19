@@ -695,10 +695,10 @@ if ($Env:flavor -ne 'DevOps') {
         )) {
             Invoke-Command -HostName $guest.IP -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername -ArgumentList $guest.Name -ErrorAction Stop -ScriptBlock {
                 param([string]$Name)
-                sudo -n hostnamectl set-hostname $Name
-                if ($LASTEXITCODE -ne 0) { throw 'Could not rename the Ubuntu guest.' }
-                sudo -n systemctl enable --now ssh
-                if ($LASTEXITCODE -ne 0) { throw 'Could not enable Ubuntu OpenSSH.' }
+                $output = sudo -n hostnamectl set-hostname $Name 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "Could not rename the Ubuntu guest: $($output -join ' ')" }
+                $output = sudo -n systemctl enable --now ssh 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "Could not enable Ubuntu OpenSSH: $($output -join ' ')" }
             }
         }
 
@@ -799,7 +799,10 @@ if ($Env:flavor -ne 'DevOps') {
                 throw "Failed to set the shared password for Linux guest user '$username'."
             }
         } -ArgumentList $nestedGuestPassword -ErrorAction Stop
-        Invoke-JSSudoCommand -Session $UbuntuSessions -Command "sh /home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"
+        Invoke-Command -Session $UbuntuSessions -ErrorAction Stop -ScriptBlock {
+            sudo -n sh "/home/$using:nestedLinuxUsername/installArcAgentModifiedUbuntu.sh" 2>&1 | ForEach-Object { Write-Host ([string]$_) }
+            if ($LASTEXITCODE -ne 0) { throw "Linux Arc onboarding failed (exit code $LASTEXITCODE)." }
+        }
 
         Write-Header 'Installing SQL Server 2025 on ubu24sql25'
         $null = Update-AzTag -ResourceId "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -Operation Merge -Tag @{ DeploymentProgress = 'Installing SQL Server 2025 on ubu24sql25' } -ErrorAction Stop
@@ -808,7 +811,7 @@ if ($Env:flavor -ne 'DevOps') {
         if ($null -eq $sqlSession) { throw 'The Ubuntu SQL guest session is missing.' }
         Invoke-Command -Session $sqlSession -ArgumentList $nestedGuestPassword, $sqlMode -ErrorAction Stop -ScriptBlock {
             param([string]$Password, [string]$Mode)
-            $Password | sudo -n timeout --kill-after=30s 90m bash /home/jumpstart/InstallNestedSqlServerUbuntu.sh $Mode
+            $Password | sudo -n timeout --kill-after=30s 90m bash /home/jumpstart/InstallNestedSqlServerUbuntu.sh $Mode 2>&1 | ForEach-Object { Write-Host ([string]$_) }
             if ($LASTEXITCODE -ne 0) { throw "Ubuntu SQL setup failed (exit code $LASTEXITCODE)." }
         }
         Install-ArcBoxServerExtension -MachineName $Ubuntu01vmName -Name 'LinuxAgent.SqlServer' -Publisher 'Microsoft.AzureData' -Settings @{

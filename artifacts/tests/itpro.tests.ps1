@@ -138,7 +138,7 @@ SELECT CAST(SERVERPROPERTY('Edition') AS nvarchar(128));
 '@
                 $result = & /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -h -1 -W -Q $query
                 if ($LASTEXITCODE -ne 0) { throw 'Linux SQL database acceptance query failed.' }
-                $memory = sudo -n /opt/mssql/bin/mssql-conf get memory.memorylimitmb
+                $memory = sudo -n /opt/mssql/bin/mssql-conf get memory.memorylimitmb 2>&1
                 if ($LASTEXITCODE -ne 0 -or ($memory -join '') -notmatch '\b2048\b') { throw 'Linux SQL memory limit is not 2048 MB.' }
                 $result
             } finally { Remove-Item Env:SQLCMDPASSWORD }
