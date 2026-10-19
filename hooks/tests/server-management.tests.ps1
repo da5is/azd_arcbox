@@ -146,6 +146,7 @@ Describe 'Arc extension provisioning safeguards' {
 Describe 'Six-machine management orchestration' {
     It 'installs the correct per-OS extensions and associates all rules without a Linux WindowsOpenSSH extension' {
         Mock Install-ArcBoxServerExtension {}
+        Mock Set-ArcBoxBaselineAudit {}
         Mock Invoke-ArcBoxServerAz {}
         Mock Invoke-AzRestMethod { @{ StatusCode = 200 } }
         Set-ArcBoxServerManagement -WindowsMachines @('win22sql22', 'win19sql16', 'win22sql19', 'win25sql25') -LinuxMachines @('ubu24sql25', 'ubu24')
@@ -155,6 +156,7 @@ Describe 'Six-machine management orchestration' {
         Should -Invoke Install-ArcBoxServerExtension -Times 6 -Exactly -ParameterFilter { $Name -like 'ChangeTracking-*' }
         Should -Invoke Invoke-ArcBoxServerAz -Times 18 -Exactly
         Should -Invoke Invoke-AzRestMethod -Times 12 -Exactly
+        Should -Invoke Set-ArcBoxBaselineAudit -Times 6 -Exactly
     }
     It 'rejects duplicate targets before making any cloud changes' {
         Mock Install-ArcBoxServerExtension {}
@@ -185,6 +187,29 @@ Describe 'Six-machine management orchestration' {
         $script:actualTargets.Count | Should -Be 6
         @($script:actualTargets | Sort-Object -Unique).Count | Should -Be 6
         $script:actualTargets | Should -Contain 'win22sql22'
+    }
+}
+
+Describe 'Explicit audit baseline guest assignment' {
+    It 'creates missing audit assignments from built-in metadata without applying settings' {
+        Mock Invoke-ArcBoxServerAz { '{"value":[]}' } -ParameterFilter { $Arguments[0] -eq 'rest' }
+        Mock Invoke-ArcBoxServerAz {
+            '{"metadata":{"guestConfiguration":{"name":"AzureWindowsBaseline","version":"1.*","configurationParameter":{"BaselineSettings":"AzureWindowsBaseline;BaselineSettings"}}},"parameters":{"BaselineSettings":{"defaultValue":"built-in-defaults"}}}'
+        } -ParameterFilter { $Arguments[0] -eq 'policy' }
+        Mock Invoke-AzRestMethod {
+            $body = $Payload | ConvertFrom-Json
+            $body.properties.guestConfiguration.assignmentType | Should -Be 'Audit'
+            $body.properties.guestConfiguration.configurationParameter[0].value | Should -Be 'built-in-defaults'
+            @{ StatusCode = 201 }
+        }
+        Set-ArcBoxBaselineAudit -MachineName win19sql16 -OS Windows
+        Should -Invoke Invoke-AzRestMethod -Exactly -Times 1
+    }
+    It 'preserves existing baseline assignments' {
+        Mock Invoke-ArcBoxServerAz { '{"value":[{"name":"AzureWindowsBaseline"}]}' }
+        Mock Invoke-AzRestMethod { throw 'Must not replace an existing assignment.' }
+        Set-ArcBoxBaselineAudit -MachineName win22sql22 -OS Windows
+        Should -Invoke Invoke-AzRestMethod -Times 0
     }
 }
 

@@ -166,6 +166,7 @@ function Set-ArcBoxServerManagement {
             $null = Invoke-ArcBoxServerAz -Arguments @('monitor', 'data-collection', 'rule', 'association', 'create',
                 '--name', "ArcBox-$rule", '--rule-id', $ruleId, '--resource', $machineId, '--output', 'none')
         }
+        Set-ArcBoxBaselineAudit -MachineName $machine -OS $os
         $endpointPath = "$machineId/providers/Microsoft.HybridConnectivity/endpoints/default"
         foreach ($request in @(
             @{ Path = "${endpointPath}?api-version=2023-03-15"; Body = '{"properties":{"type":"default"}}' },
@@ -175,6 +176,38 @@ function Set-ArcBoxServerManagement {
             if ($response.StatusCode -notin @(200, 201, 202)) { throw "Arc SSH configuration failed on '$machine' (HTTP $($response.StatusCode))." }
         }
     }
+}
+
+function Set-ArcBoxBaselineAudit {
+    param([Parameter(Mandatory)][string]$MachineName, [Parameter(Mandatory)][ValidateSet('Windows', 'Linux')][string]$OS)
+
+    $machineId = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName"
+    $assignmentPath = "$machineId/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments"
+    $assignments = (Invoke-ArcBoxServerAz -Arguments @('rest', '--method', 'get', '--url', "https://management.azure.com${assignmentPath}?api-version=2024-04-05", '--output', 'json') | ConvertFrom-Json).value
+    if (@($assignments | Where-Object name -eq "Azure${OS}Baseline").Count -gt 0) { return }
+
+    $definitionId = if ($OS -eq 'Windows') { '72650e9f-97bc-4b2a-ab5f-9781a9fcecbc' } else { 'fc9b3da7-8347-4380-8e70-0a0361d8dedd' }
+    $definition = Invoke-ArcBoxServerAz -Arguments @('policy', 'definition', 'show', '--name', $definitionId, '--output', 'json') | ConvertFrom-Json
+    $metadata = $definition.metadata.guestConfiguration
+    if ($metadata.name -ne "Azure${OS}Baseline" -or [string]::IsNullOrWhiteSpace($metadata.version)) { throw "The $OS built-in baseline metadata is invalid." }
+    $parameters = @($metadata.configurationParameter.PSObject.Properties | ForEach-Object {
+        $parameter = $definition.parameters.($_.Name)
+        if ($null -eq $parameter -or $null -eq $parameter.defaultValue) { throw "The built-in baseline parameter '$($_.Name)' has no default." }
+        @{ name = $_.Value; value = $parameter.defaultValue }
+    })
+    $payload = @{
+        properties = @{
+            context = 'AzurePolicy'
+            guestConfiguration = @{
+                name = $metadata.name
+                version = $metadata.version
+                assignmentType = 'Audit'
+                configurationParameter = $parameters
+            }
+        }
+    } | ConvertTo-Json -Depth 15
+    $response = Invoke-AzRestMethod -Method PUT -Path "$assignmentPath/$($metadata.name)?api-version=2024-04-05" -Payload $payload -ErrorAction Stop
+    if ($response.StatusCode -notin @(200, 201, 202)) { throw "Could not create the audit-only baseline assignment on '$MachineName' (HTTP $($response.StatusCode))." }
 }
 
 function Wait-ArcBoxBaselineReport {
