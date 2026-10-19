@@ -250,8 +250,8 @@ WHILE SYSDATETIME()<@until
             } while ($running.Count -gt 0 -and (Get-Date) -lt $deadline)
             $running.Count | Should -Be 0
             foreach ($job in $jobs) {
-                $job.State | Should -Be 'Completed'
                 Receive-Job -Job $job -ErrorAction Stop | Out-Null
+                $job.State | Should -Be 'Completed'
             }
             @(Get-VM -Name @('win22sql22', 'win19sql16', 'win22sql19', 'win25sql25', 'ubu24sql25', 'ubu24') | Where-Object State -ne Running).Count | Should -Be 0
         } finally {

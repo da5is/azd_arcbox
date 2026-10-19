@@ -402,6 +402,13 @@ Describe 'Ubuntu SQL sample parity and installer contracts' {
             $check = [scriptblock]::Create("$($assignment.Extent.Text)`n$($guard.Extent.Text)")
             function sudo { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) throw 'Unexpected memory query.' }
         }
+
+        Describe 'Concurrent SQL load error reporting' {
+            It 'surfaces asynchronous command errors before asserting the job state' {
+                $source = Get-Content (Join-Path $root 'artifacts\tests\itpro.tests.ps1') -Raw
+                $source.IndexOf('Receive-Job -Job $job -ErrorAction Stop') | Should -BeLessThan $source.IndexOf('$job.State | Should')
+            }
+        }
         It 'accepts only the exact configured 2048-MB value' {
             Mock sudo { $global:LASTEXITCODE = 0; '2048' }
             { & $check } | Should -Not -Throw
