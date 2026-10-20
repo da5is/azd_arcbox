@@ -93,6 +93,48 @@ Describe 'Arc extension provisioning safeguards' {
         Mock Get-ArcBoxServerExtensions { [pscustomobject]@{ name = 'AzureMonitorLinuxAgent'; properties = @{ provisioningState = 'Failed' } } }
         { Install-ArcBoxServerExtension -MachineName ubu24 -Name AzureMonitorLinuxAgent -Publisher Microsoft.Azure.Monitor } | Should -Throw '*repair it before retrying*'
     }
+    It 'reuses the prebuilt SQL guest AMA in state <State> through the actual setup caller' -ForEach @(
+        @{ State = 'Creating' }, @{ State = 'Updating' }, @{ State = 'Succeeded' }
+    ) {
+        $source = Get-Content (Join-Path $root 'artifacts\ArcServersLogonScript.ps1') -Raw
+        $start = $source.IndexOf('    Write-Host "Installing Azure Monitoring Agent extension.')
+        $end = $source.IndexOf('    # Get access token to make ARM REST API call', $start)
+        $start | Should -BeGreaterThan -1
+        $end | Should -BeGreaterThan $start
+        $script:reads = 0
+        $script:initialAmaState = $State
+        Mock Get-ArcBoxServerExtensions {
+            $script:reads++
+            [pscustomobject]@{
+                name = 'AzureMonitorWindowsAgent'
+                properties = @{
+                    publisher = 'Microsoft.Azure.Monitor'
+                    provisioningState = $(if ($script:reads -lt 3) { $script:initialAmaState } else { 'Succeeded' })
+                }
+            }
+        }
+        Mock az { throw 'Must not create an existing AMA extension.' }
+        $SQLvmName = 'win22sql22'
+        . ([scriptblock]::Create($source.Substring($start, $end - $start)))
+        Should -Invoke az -Times 0
+        Should -Invoke Get-ArcBoxServerExtensions -ParameterFilter { $MachineName -eq 'win22sql22' } -Times $(if ($State -eq 'Succeeded') { 2 } else { 3 }) -Exactly
+    }
+    It 'downloads the shared extension helper for both flavors that run SQL guest setup' {
+        $source = Get-Content (Join-Path $root 'artifacts\ArcServersLogonScript.ps1') -Raw
+        $source | Should -Match "if \(\`$env:flavor -in @\('ITPro', 'DataOps'\)\) \{\s+\. "
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $root 'artifacts\Bootstrap.ps1'), [ref]$null, [ref]$null)
+        foreach ($flavor in @('ITPro', 'DataOps')) {
+            $block = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.IfStatementAst] -and
+                    $node.Clauses[0].Item1.Extent.Text -eq "`$flavor -eq `"$flavor`"" -and
+                    $node.Extent.Text -match 'artifacts/ArcServersLogonScript.ps1'
+            }, $true)
+            $block | Should -Not -BeNullOrEmpty
+            $block.Extent.Text | Should -Match 'artifacts/ArcBoxServerManagement.ps1'
+        }
+    }
     It 'polls an initially invisible extension and uses a settings file' {
         $script:reads = 0
         Mock Get-ArcBoxServerExtensions {
@@ -119,10 +161,41 @@ Describe 'Arc extension provisioning safeguards' {
         $script:reads = 0
         Mock Get-ArcBoxServerExtensions {
             $script:reads++
+            if ($script:reads -gt 1) {
+                [pscustomobject]@{
+                    name = 'AzureMonitorLinuxAgent'
+                    properties = @{
+                        publisher = 'Microsoft.Azure.Monitor'
+                        provisioningState = $(if ($script:reads -lt 4) { 'Creating' } else { 'Succeeded' })
+                    }
+                }
+            }
+        }
+        Mock az {
+            $global:LASTEXITCODE = 1
+            'ERROR: (HCRP409) An extension of type AzureMonitorLinuxAgent is still processing.'
+        }
+        { Install-ArcBoxServerExtension -MachineName ubu24 -Name AzureMonitorLinuxAgent -Publisher Microsoft.Azure.Monitor } | Should -Not -Throw
+        Should -Invoke Start-Sleep -Times 1 -Exactly
+    }
+    It 'does not treat unrelated CLI errors as a concurrent installation' {
+        $script:reads = 0
+        Mock Get-ArcBoxServerExtensions {
+            $script:reads++
             if ($script:reads -gt 1) { [pscustomobject]@{ name = 'AzureMonitorLinuxAgent'; properties = @{ publisher = 'Microsoft.Azure.Monitor'; provisioningState = 'Succeeded' } } }
         }
-        Mock az { $global:LASTEXITCODE = 1 }
-        { Install-ArcBoxServerExtension -MachineName ubu24 -Name AzureMonitorLinuxAgent -Publisher Microsoft.Azure.Monitor } | Should -Not -Throw
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: AuthorizationFailed' }
+        { Install-ArcBoxServerExtension -MachineName ubu24 -Name AzureMonitorLinuxAgent -Publisher Microsoft.Azure.Monitor } | Should -Throw '*AuthorizationFailed*'
+        $script:reads | Should -Be 1
+    }
+    It 'does not reuse a conflicting extension from a different publisher' {
+        $script:reads = 0
+        Mock Get-ArcBoxServerExtensions {
+            $script:reads++
+            if ($script:reads -gt 1) { [pscustomobject]@{ name = 'AzureMonitorLinuxAgent'; properties = @{ publisher = 'Other.Publisher'; provisioningState = 'Creating' } } }
+        }
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: (HCRP409) An extension is still processing.' }
+        { Install-ArcBoxServerExtension -MachineName ubu24 -Name AzureMonitorLinuxAgent -Publisher Microsoft.Azure.Monitor } | Should -Throw '*Could not create extension*HCRP409*'
     }
     It 'bounds pending extension polling' {
         $script:clockReads = 0

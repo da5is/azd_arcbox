@@ -124,12 +124,16 @@ function Install-ArcBoxServerExtension {
                 $Settings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $settingsPath -Encoding utf8 -ErrorAction Stop
                 $arguments += @('--settings', "@$settingsPath")
             }
-            $null = & az @arguments --subscription $env:subscriptionId --only-show-errors
-            if ($LASTEXITCODE -ne 0) {
+            $createOutput = @(& az @arguments --subscription $env:subscriptionId --only-show-errors 2>&1)
+            $createExitCode = $LASTEXITCODE
+            if ($createExitCode -ne 0) {
+                if (($createOutput -join "`n") -notmatch '\bHCRP409\b') {
+                    throw "Could not create extension '$Name' on '$MachineName' (Azure CLI exit code $createExitCode): $($createOutput -join "`n")"
+                }
                 # Policy may have created the same extension after our initial read.
                 $concurrent = @(Get-ArcBoxServerExtensions -MachineName $MachineName | Where-Object { $_.name -eq $Name -and $_.properties.publisher -eq $Publisher })
                 if ($concurrent.Count -ne 1 -or $concurrent[0].properties.provisioningState -notin @('Creating', 'Updating', 'Succeeded')) {
-                    throw "Could not create extension '$Name' on '$MachineName'."
+                    throw "Could not create extension '$Name' on '$MachineName' (Azure CLI exit code $createExitCode): $($createOutput -join "`n")"
                 }
                 Write-Warning "Extension '$Name' on '$MachineName' was concurrently created; waiting for that deployment."
             }

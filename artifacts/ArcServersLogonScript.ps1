@@ -16,7 +16,7 @@ $azureLocation = $env:azureLocation
 $resourceGroup = $env:resourceGroup
 $resourceTags = $env:resourceTags
 $namingPrefix = $env:namingPrefix
-if ($env:flavor -eq 'ITPro') {
+if ($env:flavor -in @('ITPro', 'DataOps')) {
     . "$env:ArcBoxDir\ArcBoxServerManagement.ps1"
 }
 
@@ -453,71 +453,46 @@ if ($Env:flavor -ne 'DevOps') {
     Write-Host "Installing SQL Server extension on the Arc-enabled Server.`n"
     Install-ArcBoxSqlExtension -MachineName $SQLvmName -LicenseType Paid
 
-    # Azure Monitor Agent extension is deployed automatically using Azure Policy. Wait until extension status is Succeded.
     Write-Host "Installing Azure Monitoring Agent extension.`n"
-    az connectedmachine extension create --machine-name $SQLvmName --name AzureMonitorWindowsAgent --publisher Microsoft.Azure.Monitor --type AzureMonitorWindowsAgent --resource-group $resourceGroup --location $azureLocation --only-show-errors --no-wait
-    if ($LASTEXITCODE -ne 0) {
-        throw "Azure Monitor Agent creation failed on $SQLvmName (Azure CLI exit code $LASTEXITCODE)."
-    }
-
-    $retryCount = 0
-    do {
-        $amaExtension = Get-AzConnectedMachineExtension -MachineName $SQLvmName -ResourceGroupName $resourceGroup -Name AzureMonitorWindowsAgent -ErrorAction Stop
-        if ($amaExtension.ProvisioningState -eq 'Succeeded') {
-            Write-Host 'Azure Monitoring Agent extension installation complete.'
-            break
-        } else {
-            $retryCount = $retryCount + 1
-            if ($retryCount -gt 10) {
-                Write-Host 'WARNING: Azure Monitor Agent extenstion is taking longger than expected. Enable SQL BPA later through Azure portal.'
-                break
-            } else {
-                Write-Host "Waiting for Azure Monitoring Agent extension installation to complete ... Retry count: $retryCount"
-                Start-Sleep(60)
-            }
-        }
-    } while ($retryCount -le 10)
+    Install-ArcBoxServerExtension -MachineName $SQLvmName -Name AzureMonitorWindowsAgent -Publisher Microsoft.Azure.Monitor
+    Write-Host 'Azure Monitoring Agent extension installation complete.'
 
     # Get access token to make ARM REST API call for SQL server BPA and migration assessments
     $token = (az account get-access-token --subscription $subscriptionId --query accessToken --output tsv)
     $headers = @{'Authorization' = "Bearer $token"; 'Content-Type' = 'application/json' }
 
-    # Enable Best practices assessment
-    if ($amaExtension.ProvisioningState -eq 'Succeeded') {
+    # Create custom log analytics table for SQL assessment
+    Write-Host "Creating Log Analytis workspace table for SQL best practices assessment.`n"
+    az monitor log-analytics workspace table create --resource-group $resourceGroup --workspace-name $Env:workspaceName -n SqlAssessment_CL --columns RawData=string TimeGenerated=datetime --only-show-errors
 
-        # Create custom log analytics table for SQL assessment
-        Write-Host "Creating Log Analytis workspace table for SQL best practices assessment.`n"
-        az monitor log-analytics workspace table create --resource-group $resourceGroup --workspace-name $Env:workspaceName -n SqlAssessment_CL --columns RawData=string TimeGenerated=datetime --only-show-errors
+    # Verify if ArcBox SQL resource is created
+    Write-Host "Enabling SQL server best practices assessment.`n"
+    $bpaDeploymentTemplateUrl = "$Env:templateBaseUrl/artifacts/sqlbpa.json"
+    az deployment group create --resource-group $resourceGroup --template-uri $bpaDeploymentTemplateUrl --parameters workspaceName=$Env:workspaceName vmName=$SQLvmName arcSubscriptionId=$subscriptionId
 
-        # Verify if ArcBox SQL resource is created
-        Write-Host "Enabling SQL server best practices assessment.`n"
-        $bpaDeploymentTemplateUrl = "$Env:templateBaseUrl/artifacts/sqlbpa.json"
-        az deployment group create --resource-group $resourceGroup --template-uri $bpaDeploymentTemplateUrl --parameters workspaceName=$Env:workspaceName vmName=$SQLvmName arcSubscriptionId=$subscriptionId
+    # Run Best practices assessment
+    Write-Host "Execute SQL server best practices assessment.`n"
 
-        # Run Best practices assessment
-        Write-Host "Execute SQL server best practices assessment.`n"
+    # Wait for a minute to finish everyting and run assessment
+    Start-Sleep(60)
 
-        # Wait for a minute to finish everyting and run assessment
-        Start-Sleep(60)
+    $armRestApiEndpoint = "https://management.azure.com/subscriptions/$subscriptionId/resourcegroups/$resourceGroup/providers/Microsoft.HybridCompute/machines/$SQLvmName/extensions/WindowsAgent.SqlServer?api-version=2019-08-02-preview"
 
-        $armRestApiEndpoint = "https://management.azure.com/subscriptions/$subscriptionId/resourcegroups/$resourceGroup/providers/Microsoft.HybridCompute/machines/$SQLvmName/extensions/WindowsAgent.SqlServer?api-version=2019-08-02-preview"
+    # Build API request payload
+    $worspaceResourceId = "/subscriptions/$subscriptionId/resourcegroups/$resourceGroup/providers/microsoft.operationalinsights/workspaces/$Env:workspaceName".ToLower()
+    $sqlExtensionId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.HybridCompute/machines/$SQLvmName/extensions/WindowsAgent.SqlServer"
+    $sqlbpaPayloadTemplate = "$Env:templateBaseUrl/artifacts/sqlbpa.payload.json"
+    $settingsSaveTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $apiPayload = (Invoke-WebRequest -Uri $sqlbpaPayloadTemplate).Content -replace '{{RESOURCEID}}', $sqlExtensionId -replace '{{LOCATION}}', $azureLocation -replace '{{WORKSPACEID}}', $worspaceResourceId -replace '{{SAVETIME}}', $settingsSaveTime
 
-        # Build API request payload
-        $worspaceResourceId = "/subscriptions/$subscriptionId/resourcegroups/$resourceGroup/providers/microsoft.operationalinsights/workspaces/$Env:workspaceName".ToLower()
-        $sqlExtensionId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.HybridCompute/machines/$SQLvmName/extensions/WindowsAgent.SqlServer"
-        $sqlbpaPayloadTemplate = "$Env:templateBaseUrl/artifacts/sqlbpa.payload.json"
-        $settingsSaveTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        $apiPayload = (Invoke-WebRequest -Uri $sqlbpaPayloadTemplate).Content -replace '{{RESOURCEID}}', $sqlExtensionId -replace '{{LOCATION}}', $azureLocation -replace '{{WORKSPACEID}}', $worspaceResourceId -replace '{{SAVETIME}}', $settingsSaveTime
-
-        # Call REST API to run best practices assessment
-        $httpResp = Invoke-WebRequest -Method Patch -Uri $armRestApiEndpoint -Body $apiPayload -Headers $headers
-        if (($httpResp.StatusCode -eq 200) -or ($httpResp.StatusCode -eq 202)) {
-            Write-Host 'Arc-enabled SQL server best practices assessment executed. Wait for assessment to complete to view results.'
-        } else {
-            <# Action when all if and elseif conditions are false #>
-            Write-Host 'SQL Best Practices Assessment faild. Please refer troubleshooting guide to run manually.'
-        }
-    } # End of SQL BPA
+    # Call REST API to run best practices assessment
+    $httpResp = Invoke-WebRequest -Method Patch -Uri $armRestApiEndpoint -Body $apiPayload -Headers $headers
+    if (($httpResp.StatusCode -eq 200) -or ($httpResp.StatusCode -eq 202)) {
+        Write-Host 'Arc-enabled SQL server best practices assessment executed. Wait for assessment to complete to view results.'
+    } else {
+        <# Action when all if and elseif conditions are false #>
+        Write-Host 'SQL Best Practices Assessment faild. Please refer troubleshooting guide to run manually.'
+    }
 
     # Run SQL Server Azure Migration Assessment
     Write-Host "Enabling SQL Server Azure Migration Assessment.`n"

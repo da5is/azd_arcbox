@@ -308,6 +308,7 @@ if ($flavor -eq "DevOps") {
 if ($flavor -eq "DataOps") {
     Write-Host "Fetching Artifacts for DataOps Flavor"
     Invoke-WebRequest ($templateBaseUrl + "artifacts/ArcServersLogonScript.ps1") -OutFile $Env:ArcBoxDir\ArcServersLogonScript.ps1
+    Invoke-WebRequest ($templateBaseUrl + "artifacts/ArcBoxServerManagement.ps1") -OutFile $Env:ArcBoxDir\ArcBoxServerManagement.ps1
     Invoke-WebRequest ($templateBaseUrl + "artifacts/DataOpsLogonScript.ps1") -OutFile $Env:ArcBoxDir\DataOpsLogonScript.ps1
     Invoke-WebRequest ($templateBaseUrl + "artifacts/RunAfterClientVMADJoin.ps1") -OutFile $Env:ArcBoxDir\RunAfterClientVMADJoin.ps1
     Invoke-WebRequest ($templateBaseUrl + "artifacts/settingsTemplate.json") -OutFile $Env:ArcBoxDir\settingsTemplate.json
