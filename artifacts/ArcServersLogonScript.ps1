@@ -798,7 +798,11 @@ if ($Env:flavor -ne 'DevOps') {
             SqlManagement = @{ IsEnabled = $true }
         }
         $null = Update-AzTag -ResourceId "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -Operation Merge -Tag @{ DeploymentProgress = 'Configuring Arc inventory, SSH and OpenTelemetry' } -ErrorAction Stop
-        Set-ArcBoxServerManagement -WindowsMachines @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName) -LinuxMachines $UbuntuVMNames
+        $linuxManagementSessions = @{
+            $Ubuntu01vmName = $sqlSession
+            $Ubuntu02vmName = $UbuntuSessions | Where-Object ComputerName -eq $Ubuntu02VmIp
+        }
+        Set-ArcBoxServerManagement -WindowsMachines @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName) -LinuxMachines $UbuntuVMNames -LinuxSessions $linuxManagementSessions
         $sshPublicKey = Get-Content "$Env:USERPROFILE\.ssh\id_rsa.pub" -Raw -ErrorAction Stop
         Invoke-Command -VMName @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName) -Credential $winCreds -ArgumentList $sshPublicKey -ErrorAction Stop -ScriptBlock {
             param([string]$PublicKey)

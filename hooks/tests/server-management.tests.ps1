@@ -222,7 +222,118 @@ Describe 'Arc extension provisioning safeguards' {
     }
 }
 
+Describe 'Linux Change Tracking missing-service recovery' {
+    BeforeEach {
+        $script:ctiSession = New-MockObject -Type System.Management.Automation.Runspaces.PSSession
+        $script:ctiReads = 0
+        $script:ctiExtension = [pscustomobject]@{
+            name = 'ChangeTracking-Linux'
+            properties = @{
+                publisher = 'Microsoft.Azure.ChangeTrackingAndInventory'
+                typeHandlerVersion = '2.42.0.0'
+                provisioningState = 'Failed'
+                instanceView = @{ status = @{ message = "Extension Message: Driver's ServiceManager could not enable Service failed to execute [err:exit status 1] [out:Failed to enable unit: Unit file cxp.service does not exist.]" } }
+            }
+        }
+        Mock Start-Sleep {}
+        Mock Get-ArcBoxServerExtensions {
+            $script:ctiReads++
+            if ($script:ctiReads -ge 4) { $script:ctiExtension.properties.provisioningState = 'Succeeded' }
+            $script:ctiExtension
+        }
+        Mock Repair-ArcBoxLinuxChangeTracking {}
+        Mock az { throw 'Must not delete or recreate the extension.' }
+    }
+    It 'retries only the vendor installer once and waits for the asynchronous success report' {
+        Install-ArcBoxServerExtension -MachineName ubu24sql25 -Name ChangeTracking-Linux -Publisher Microsoft.Azure.ChangeTrackingAndInventory -LinuxGuestSession $script:ctiSession
+        Should -Invoke Repair-ArcBoxLinuxChangeTracking -Exactly -Times 1 -ParameterFilter { $Session -eq $script:ctiSession -and $Version -eq '2.42.0.0' }
+        Should -Invoke Start-Sleep -Exactly -Times 2
+        Should -Invoke az -Times 0
+    }
+    It 'handles the same failure during a newly created extension installation' {
+        Mock Get-ArcBoxServerExtensions {
+            $script:ctiReads++
+            if ($script:ctiReads -eq 1) { return }
+            if ($script:ctiReads -ge 4) { $script:ctiExtension.properties.provisioningState = 'Succeeded' }
+            $script:ctiExtension
+        }
+        $saved = $env:ArcBoxDir
+        $env:ArcBoxDir = $TestDrive
+        try {
+            Mock az { $global:LASTEXITCODE = 0 }
+            Install-ArcBoxServerExtension -MachineName ubu24sql25 -Name ChangeTracking-Linux -Publisher Microsoft.Azure.ChangeTrackingAndInventory -LinuxGuestSession $script:ctiSession
+            Should -Invoke Repair-ArcBoxLinuxChangeTracking -Exactly -Times 1
+            Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
+        } finally { $env:ArcBoxDir = $saved }
+    }
+    It 'does not mask unrelated Change Tracking failures' {
+        $script:ctiExtension.properties.instanceView.status.message = 'Permission denied.'
+        { Install-ArcBoxServerExtension -MachineName ubu24sql25 -Name ChangeTracking-Linux -Publisher Microsoft.Azure.ChangeTrackingAndInventory -LinuxGuestSession $script:ctiSession } | Should -Throw '*repair it before retrying*'
+        Should -Invoke Repair-ArcBoxLinuxChangeTracking -Times 0
+    }
+    It 'does not attempt recovery without an authenticated guest session' {
+        { Install-ArcBoxServerExtension -MachineName ubu24sql25 -Name ChangeTracking-Linux -Publisher Microsoft.Azure.ChangeTrackingAndInventory } | Should -Throw '*repair it before retrying*'
+        Should -Invoke Repair-ArcBoxLinuxChangeTracking -Times 0
+    }
+    It 'propagates an unsuccessful vendor installer retry' {
+        Mock Repair-ArcBoxLinuxChangeTracking { throw 'Linux Change Tracking service recovery failed (exit code 1).' }
+        { Install-ArcBoxServerExtension -MachineName ubu24sql25 -Name ChangeTracking-Linux -Publisher Microsoft.Azure.ChangeTrackingAndInventory -LinuxGuestSession $script:ctiSession } | Should -Throw '*recovery failed*'
+        Should -Invoke Repair-ArcBoxLinuxChangeTracking -Exactly -Times 1
+    }
+    It 'bounds the wait if the failure report never clears' {
+        Mock Get-ArcBoxServerExtensions { $script:ctiExtension }
+        $script:ctiClock = 0
+        Mock Get-Date {
+            $script:ctiClock++
+            [datetime]'2026-01-01' + [timespan]::FromMinutes(30 * ($script:ctiClock - 1))
+        }
+        { Install-ArcBoxServerExtension -MachineName ubu24sql25 -Name ChangeTracking-Linux -Publisher Microsoft.Azure.ChangeTrackingAndInventory -LinuxGuestSession $script:ctiSession } | Should -Throw '*Timed out*'
+        Should -Invoke Repair-ArcBoxLinuxChangeTracking -Exactly -Times 1
+    }
+}
+
+Describe 'Linux Change Tracking vendor retry command' {
+    BeforeEach {
+        $session = New-MockObject -Type System.Management.Automation.Runspaces.PSSession
+        function sudo { param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments) throw 'Unexpected sudo call.' }
+        Mock Invoke-Command { & $ScriptBlock @ArgumentList }
+    }
+    It 'runs the downloaded version-matched installer with a timeout and verifies the real service' {
+        Mock sudo {
+            $Arguments | Should -Contain '300s'
+            $Arguments | Should -Contain '/var/lib/waagent/Microsoft.Azure.ChangeTrackingAndInventory.ChangeTracking-Linux-2.42.0.0'
+            $Arguments | Should -Contain 'cd "$1" && ./cta_linux_handler install && ./cta_linux_handler enable && systemctl is-active --quiet cxp && systemctl is-enabled --quiet cxp'
+            $global:LASTEXITCODE = 0
+        }
+        Repair-ArcBoxLinuxChangeTracking -Session $session -Version '2.42.0.0'
+        Should -Invoke sudo -Exactly -Times 1
+    }
+    It 'surfaces native errors instead of accepting another missing service' {
+        Mock sudo { $global:LASTEXITCODE = 1; 'Unit file cxp.service does not exist.' }
+        { Repair-ArcBoxLinuxChangeTracking -Session $session -Version '2.42.0.0' } | Should -Throw '*recovery failed*exit code 1*cxp.service*'
+    }
+    It 'rejects an invalid version before executing guest commands' {
+        { Repair-ArcBoxLinuxChangeTracking -Session $session -Version '../invalid' } | Should -Throw
+        Should -Invoke Invoke-Command -Times 0
+    }
+}
+
 Describe 'Six-machine management orchestration' {
+    It 'supplies each Linux guest session only to its Change Tracking installer' {
+        $sqlSession = New-MockObject -Type System.Management.Automation.Runspaces.PSSession
+        $ubuntuSession = New-MockObject -Type System.Management.Automation.Runspaces.PSSession
+        Mock Install-ArcBoxServerExtension {}
+        Mock Set-ArcBoxBaselineAudit {}
+        Mock Invoke-ArcBoxServerAz {}
+        Mock Invoke-AzRestMethod { @{ StatusCode = 200 } }
+        Set-ArcBoxServerManagement -WindowsMachines @('win22sql22') -LinuxMachines @('ubu24sql25', 'ubu24') -LinuxSessions @{
+            ubu24sql25 = $sqlSession
+            ubu24 = $ubuntuSession
+        }
+        Should -Invoke Install-ArcBoxServerExtension -Exactly -Times 1 -ParameterFilter { $MachineName -eq 'ubu24sql25' -and $Name -eq 'ChangeTracking-Linux' -and $LinuxGuestSession -eq $sqlSession }
+        Should -Invoke Install-ArcBoxServerExtension -Exactly -Times 1 -ParameterFilter { $MachineName -eq 'ubu24' -and $Name -eq 'ChangeTracking-Linux' -and $LinuxGuestSession -eq $ubuntuSession }
+        Should -Invoke Install-ArcBoxServerExtension -Times 0 -ParameterFilter { $Name -ne 'ChangeTracking-Linux' -and $null -ne $LinuxGuestSession }
+    }
     It 'installs the correct per-OS extensions and associates all rules without a Linux WindowsOpenSSH extension' {
         Mock Install-ArcBoxServerExtension {}
         Mock Set-ArcBoxBaselineAudit {}
@@ -258,8 +369,23 @@ Describe 'Six-machine management orchestration' {
         $Win22Sql19vmName = 'win22sql19'
         $Win25Sql25vmName = 'win25sql25'
         $UbuntuVMNames = @('ubu24sql25', 'ubu24')
+        $Ubuntu01vmName = 'ubu24sql25'
+        $Ubuntu02vmName = 'ubu24'
+        $Ubuntu02VmIp = '10.10.1.105'
+        $sqlSession = [pscustomobject]@{ ComputerName = '10.10.1.104' }
+        $UbuntuSessions = @($sqlSession, [pscustomobject]@{ ComputerName = $Ubuntu02VmIp })
+        $sessionAssignment = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left.Extent.Text -eq '$linuxManagementSessions'
+        }, $true)
+        . ([scriptblock]::Create($sessionAssignment.Extent.Text))
         Mock Install-ArcBoxSqlExtension {}
-        Mock Set-ArcBoxServerManagement { $script:actualTargets = @($WindowsMachines) + @($LinuxMachines) }
+        Mock Set-ArcBoxServerManagement {
+            $script:actualTargets = @($WindowsMachines) + @($LinuxMachines)
+            $LinuxSessions.ubu24sql25 | Should -Be $sqlSession
+            $LinuxSessions.ubu24.ComputerName | Should -Be $Ubuntu02VmIp
+        }
         & ([scriptblock]::Create($loop.Extent.Text))
         & ([scriptblock]::Create($management.Extent.Text))
         $SQLvmName | Should -BeExactly 'win22sql22'

@@ -101,18 +101,43 @@ function Get-ArcBoxServerExtensions {
     return (Invoke-ArcBoxServerAz -Arguments @('rest', '--method', 'get', '--url', $url, '--output', 'json') | ConvertFrom-Json).value
 }
 
+function Repair-ArcBoxLinuxChangeTracking {
+    param(
+        [Parameter(Mandatory)][System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+\.\d+$')][string]$Version
+    )
+
+    Invoke-Command -Session $Session -ArgumentList $Version -ErrorAction Stop -ScriptBlock {
+        param([string]$Version)
+        $path = "/var/lib/waagent/Microsoft.Azure.ChangeTrackingAndInventory.ChangeTracking-Linux-$Version"
+        $output = sudo -n timeout --kill-after=30s 300s sh -c 'cd "$1" && ./cta_linux_handler install && ./cta_linux_handler enable && systemctl is-active --quiet cxp && systemctl is-enabled --quiet cxp' sh $path 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Linux Change Tracking service recovery failed (exit code $LASTEXITCODE): $($output -join "`n")"
+        }
+    }
+}
+
 function Install-ArcBoxServerExtension {
     param(
         [Parameter(Mandatory)][string]$MachineName,
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Publisher,
-        [hashtable]$Settings
+        [hashtable]$Settings,
+        [System.Management.Automation.Runspaces.PSSession]$LinuxGuestSession
     )
 
+    $canRepairLinuxService = $Name -eq 'ChangeTracking-Linux' -and
+        $Publisher -eq 'Microsoft.Azure.ChangeTrackingAndInventory' -and $null -ne $LinuxGuestSession
+    $missingServicePattern = 'Failed to enable unit: Unit file cxp\.service does not exist\.'
+    $serviceRepairAttempted = $false
     $extension = @(Get-ArcBoxServerExtensions -MachineName $MachineName | Where-Object name -eq $Name)
     if ($extension.Count -gt 1) { throw "Multiple extensions named '$Name' on '$MachineName'." }
     if ($extension.Count -eq 1 -and $extension[0].properties.provisioningState -in @('Failed', 'Canceled')) {
-        throw "Existing extension '$Name' on '$MachineName' is failed; repair it before retrying."
+        if (-not ($canRepairLinuxService -and $extension[0].properties.provisioningState -eq 'Failed' -and
+            $extension[0].properties.publisher -eq $Publisher -and
+            $extension[0].properties.instanceView.status.message -match $missingServicePattern)) {
+            throw "Existing extension '$Name' on '$MachineName' is failed; repair it before retrying."
+        }
     }
     if ($extension.Count -eq 0) {
         $arguments = @('connectedmachine', 'extension', 'create', '--resource-group', $env:resourceGroup,
@@ -146,21 +171,38 @@ function Install-ArcBoxServerExtension {
         $extension = @(Get-ArcBoxServerExtensions -MachineName $MachineName | Where-Object name -eq $Name)
         $state = if ($extension.Count -eq 1) { $extension[0].properties.provisioningState } else { '' }
         if ($state -eq 'Succeeded') { return }
-        if ($state -in @('Failed', 'Canceled')) { throw "Extension '$Name' on '$MachineName' entered '$state'." }
+        if ($state -in @('Failed', 'Canceled')) {
+            if ($state -eq 'Failed' -and $canRepairLinuxService -and
+                $extension[0].properties.publisher -eq $Publisher -and
+                $extension[0].properties.instanceView.status.message -match $missingServicePattern) {
+                if (-not $serviceRepairAttempted) {
+                    $serviceRepairAttempted = $true
+                    Write-Warning "Change Tracking on '$MachineName' did not install cxp.service; retrying the downloaded Microsoft installer once."
+                    Repair-ArcBoxLinuxChangeTracking -Session $LinuxGuestSession -Version $extension[0].properties.typeHandlerVersion
+                }
+            } else {
+                throw "Extension '$Name' on '$MachineName' entered '$state': $($extension[0].properties.instanceView.status.message)"
+            }
+        }
         Start-Sleep -Seconds 20
     } while ((Get-Date) -lt $deadline)
     throw "Timed out waiting for extension '$Name' on '$MachineName' (last state '$state')."
 }
 
 function Set-ArcBoxServerManagement {
-    param([Parameter(Mandatory)][string[]]$WindowsMachines, [Parameter(Mandatory)][string[]]$LinuxMachines)
+    param(
+        [Parameter(Mandatory)][string[]]$WindowsMachines,
+        [Parameter(Mandatory)][string[]]$LinuxMachines,
+        [hashtable]$LinuxSessions
+    )
 
     $machines = @($WindowsMachines) + @($LinuxMachines)
     if (@($machines | Sort-Object -Unique).Count -ne $machines.Count) { throw 'Arc management requires unique machine names; refusing to skip a guest through duplicate targets.' }
     foreach ($machine in $machines) {
         $os = if ($WindowsMachines -contains $machine) { 'Windows' } else { 'Linux' }
         Install-ArcBoxServerExtension -MachineName $machine -Name "AzureMonitor${os}Agent" -Publisher 'Microsoft.Azure.Monitor'
-        Install-ArcBoxServerExtension -MachineName $machine -Name "ChangeTracking-$os" -Publisher 'Microsoft.Azure.ChangeTrackingAndInventory'
+        $linuxSession = if ($null -ne $LinuxSessions -and $os -eq 'Linux') { $LinuxSessions[$machine] } else { $null }
+        Install-ArcBoxServerExtension -MachineName $machine -Name "ChangeTracking-$os" -Publisher 'Microsoft.Azure.ChangeTrackingAndInventory' -LinuxGuestSession $linuxSession
         if ($os -eq 'Windows') {
             Install-ArcBoxServerExtension -MachineName $machine -Name 'WindowsOpenSSH' -Publisher 'Microsoft.Azure.OpenSSH'
         }
