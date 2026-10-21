@@ -1064,6 +1064,78 @@ Describe 'ArcBox SQL extension installation' {
         { Install-ArcBoxSqlExtension -MachineName 'test-vm' -LicenseType Paid } | Should -Throw '*creation failed*exit code 9*'
         Should -Invoke az -Times 1 -Exactly -ParameterFilter { $Arguments -contains 'rest' }
     }
+    It 'waits for a concurrent SQL installation in state <State> without writing its settings again' -ForEach @(
+        @{ State = 'Creating' }, @{ State = 'Updating' }, @{ State = 'Succeeded' }
+    ) {
+        $script:concurrentState = $State
+        Mock az {
+            $global:LASTEXITCODE = 1
+            'ERROR: (HCRP409) An extension of type WindowsAgent.SqlServer is still processing.'
+        } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az {
+            $global:LASTEXITCODE = 0
+            @{
+                properties = @{
+                    publisher = 'Microsoft.AzureData'
+                    type = 'WindowsAgent.SqlServer'
+                    provisioningState = $script:concurrentState
+                    settings = @{ LicenseType = 'Paid'; enableExtendedSecurityUpdates = $true }
+                }
+            } | ConvertTo-Json -Depth 4 -Compress
+        } -ParameterFilter { $Arguments -contains 'json' }
+        Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly
+        Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
+        Should -Invoke az -Times 0 -ParameterFilter { $Arguments -contains 'update' -or $Arguments -contains 'delete' }
+        Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
+    }
+    It 'allows a conflicting SQL installation to become visible before checking its publisher' {
+        $script:conflictReads = 0
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: HCRP409' } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az {
+            $global:LASTEXITCODE = 0
+            $script:conflictReads++
+            if ($script:conflictReads -eq 1) { 'null' } else {
+                '{"properties":{"publisher":"Microsoft.AzureData","type":"WindowsAgent.SqlServer","provisioningState":"Creating"}}'
+            }
+        } -ParameterFilter { $Arguments -contains 'json' }
+        Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly
+        Should -Invoke Start-Sleep -Exactly -Times 1
+        Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
+    }
+    It 'rejects a conflict with an unexpected SQL extension <Field>' -ForEach @(
+        @{ Field = 'publisher'; Value = 'Other.Publisher' },
+        @{ Field = 'type'; Value = 'Other.Extension' },
+        @{ Field = 'provisioningState'; Value = 'Failed' },
+        @{ Field = 'provisioningState'; Value = 'Canceled' }
+    ) {
+        $script:conflictProperties = @{ publisher = 'Microsoft.AzureData'; type = 'WindowsAgent.SqlServer'; provisioningState = 'Creating' }
+        $script:conflictProperties[$Field] = $Value
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: HCRP409' } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az { $global:LASTEXITCODE = 0; @{ properties = $script:conflictProperties } | ConvertTo-Json -Compress } -ParameterFilter { $Arguments -contains 'json' }
+        { Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly } | Should -Throw '*refusing to overwrite its license settings*'
+    }
+    It 'surfaces a concurrent extension lookup failure without recreating the extension' {
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: HCRP409' } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az { $global:LASTEXITCODE = 7 } -ParameterFilter { $Arguments -contains 'json' }
+        { Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly } | Should -Throw '*verify concurrent SQL extension*exit code 7*'
+        Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
+    }
+    It 'bounds the conflict visibility wait and cleans its settings file' {
+        $script:dateCalls = 0
+        Mock Get-Date {
+            $script:dateCalls++
+            ([datetime]'2026-10-21').AddMinutes(16 * ($script:dateCalls - 1))
+        }
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: HCRP409' } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az { $global:LASTEXITCODE = 0; 'null' } -ParameterFilter { $Arguments -contains 'json' }
+        { Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly } | Should -Throw '*Timed out verifying concurrent*'
+        Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
+    }
+    It 'does not hide unrelated create errors behind an existing extension' {
+        Mock az { $global:LASTEXITCODE = 9; 'AuthorizationFailed' } -ParameterFilter { $Arguments -contains 'create' }
+        { Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly } | Should -Throw '*exit code 9*AuthorizationFailed*'
+        Should -Invoke az -Times 0 -ParameterFilter { $Arguments -contains 'json' }
+    }
 
     It 'surfaces a failed provisioning state' {
         Mock az { $global:LASTEXITCODE = 0; 'Failed' } -ParameterFilter { $Arguments -contains 'rest' }

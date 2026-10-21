@@ -132,6 +132,7 @@ function Install-ArcBoxSqlExtension {
     if ($state -in @('Failed', 'Canceled')) {
         throw "SQL extension on $MachineName entered state '$state'. Repair the existing extension without overwriting its license settings."
     }
+    $deadline = (Get-Date).AddMinutes(15)
     if ([string]::IsNullOrWhiteSpace($state)) {
         $settingsPath = Join-Path $Env:ArcBoxDir "SqlExtension-$MachineName.json"
         @{
@@ -140,16 +141,38 @@ function Install-ArcBoxSqlExtension {
         } | ConvertTo-Json -Depth 3 | Set-Content -Path $settingsPath -Encoding utf8 -ErrorAction Stop
         try {
             # A settings file avoids JSON quote loss through az.cmd on Windows.
-            az connectedmachine extension create --subscription $subscriptionId --machine-name $MachineName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --type 'WindowsAgent.SqlServer' --publisher 'Microsoft.AzureData' --settings "@$settingsPath" --tags $resourceTags --location $azureLocation --only-show-errors --no-wait
-            if ($LASTEXITCODE -ne 0) {
-                throw "SQL extension creation failed on $MachineName (Azure CLI exit code $LASTEXITCODE)."
+            $createOutput = @(az connectedmachine extension create --subscription $subscriptionId --machine-name $MachineName --name 'WindowsAgent.SqlServer' --resource-group $resourceGroup --type 'WindowsAgent.SqlServer' --publisher 'Microsoft.AzureData' --settings "@$settingsPath" --tags $resourceTags --location $azureLocation --only-show-errors --no-wait 2>&1)
+            $createExitCode = $LASTEXITCODE
+            if ($createExitCode -ne 0) {
+                if (($createOutput -join "`n") -notmatch '\bHCRP409\b') {
+                    throw "SQL extension creation failed on $MachineName (Azure CLI exit code $createExitCode): $($createOutput -join "`n")"
+                }
+                do {
+                    $concurrentJson = az rest --method get --url $extensionsUrl --query "value[?name=='WindowsAgent.SqlServer'] | [0]" --output json --only-show-errors
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Could not verify concurrent SQL extension on $MachineName (Azure CLI exit code $LASTEXITCODE)."
+                    }
+                    $concurrent = if ([string]::IsNullOrWhiteSpace(($concurrentJson -join "`n"))) { $null } else { $concurrentJson | ConvertFrom-Json -ErrorAction Stop }
+                    if ($null -ne $concurrent) {
+                        if ($concurrent.properties.publisher -ne 'Microsoft.AzureData' -or
+                            $concurrent.properties.type -ne 'WindowsAgent.SqlServer' -or
+                            $concurrent.properties.provisioningState -notin @('Creating', 'Updating', 'Succeeded')) {
+                            throw "Conflicting SQL extension on $MachineName has an unexpected publisher, type, or state; refusing to overwrite its license settings."
+                        }
+                        Write-Warning "SQL extension on $MachineName is already installing; preserving that deployment and its license settings."
+                        break
+                    }
+                    Start-Sleep -Seconds 30
+                } while ((Get-Date) -lt $deadline)
+                if ($null -eq $concurrent) {
+                    throw "Timed out verifying concurrent SQL extension on $MachineName after HCRP409."
+                }
             }
         } finally {
             Remove-Item -LiteralPath $settingsPath -Force
         }
     }
 
-    $deadline = (Get-Date).AddMinutes(15)
     do {
         $state = az rest --method get --url $extensionsUrl --query "value[?name=='WindowsAgent.SqlServer'].properties.provisioningState | [0]" --output tsv --only-show-errors
         if ($LASTEXITCODE -ne 0) {
