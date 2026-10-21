@@ -136,6 +136,9 @@ function Assert-ArcBoxSqlArtifacts {
     $projectRoot = Split-Path $PSScriptRoot -Parent
     foreach ($artifact in @(
         'artifacts\Bootstrap.ps1',
+        'artifacts\WinGet.ps1',
+        'artifacts\dsc\common.dsc.yml',
+        'artifacts\tests\Invoke-Test.ps1',
         'artifacts\ArcServersLogonScript.ps1',
         'artifacts\InstallNestedSqlServer.ps1',
         'artifacts\InstallNestedSqlServerUbuntu.sh',

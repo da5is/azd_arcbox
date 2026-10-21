@@ -35,7 +35,14 @@ Set-Content "$Env:windir\TEMP\arcbox-tests-failed.txt" $tests_failed
 
 Set-JSDesktopBackground -ImagePath "$Env:ArcBoxDir\wallpaper.bmp"
 
-bginfo.exe $Env:ArcBoxTestsDir\arcbox-bginfo.bgi /timer:0 /NOLICPROMPT
+$bgInfoPath = Join-Path $Env:ArcBoxDir 'Tools\Bginfo64.exe'
+if (-not (Test-Path -LiteralPath $bgInfoPath -PathType Leaf)) {
+    throw "BGInfo is missing at '$bgInfoPath'. Repair the WinGet setup prerequisite before running deployment checks."
+}
+$bgInfo = Start-Process -FilePath $bgInfoPath -ArgumentList "`"$Env:ArcBoxTestsDir\arcbox-bginfo.bgi`" /timer:0 /NOLICPROMPT" -Wait -PassThru -ErrorAction Stop
+if ($bgInfo.ExitCode -ne 0) {
+    throw "BGInfo failed to update the deployment wallpaper (exit code $($bgInfo.ExitCode))."
+}
 
 $DeploymentStatusPath = "C:\ArcBox\Logs\DeploymentStatus.log"
 
