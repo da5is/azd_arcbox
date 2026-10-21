@@ -816,6 +816,13 @@ Describe 'ArcBox guest provisioning safeguards' {
         $source | Should -Match 'az tag update [^\r\n]+--operation Merge --tags ArcSQLServerExtensionDeployment=Disabled'
         $source | Should -Not -Match 'az tag create'
     }
+    It 'reports Ubuntu onboarding before running its package installer rather than leaving the Windows SQL stage' {
+        $progress = $source.IndexOf("DeploymentProgress = 'Onboarding Ubuntu guests to Azure Arc'")
+        $progress | Should -BeGreaterThan $source.IndexOf('Installing SQL Server extensions on Arc-enabled Windows VMs')
+        $progress | Should -BeLessThan $source.IndexOf('sudo -n sh "/home/$using:nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"')
+        $progress | Should -BeGreaterThan -1
+        $source.Substring($progress - 180, 180) | Should -Match 'Update-AzTag.*-Operation Merge -Tag'
+    }
     It 'names the prebuilt SQL Server guest for its OS and SQL Server versions' {
         $source | Should -Match "\$SQLvmName = 'win22sql22'"
         $configuration = Get-Content (Join-Path $arcboxRoot 'artifacts\dsc\virtual_machines_sql.dsc.yml') -Raw

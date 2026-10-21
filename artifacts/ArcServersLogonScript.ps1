@@ -765,6 +765,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Output 'Onboarding the nested Linux VMs as an Azure Arc-enabled servers'
+        $null = Update-AzTag -ResourceId "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -Operation Merge -Tag @{ DeploymentProgress = 'Onboarding Ubuntu guests to Azure Arc' } -ErrorAction Stop
         $UbuntuSessions = New-PSSession -HostName $Ubuntu01VmIp, $Ubuntu02VmIp -KeyFilePath "$Env:USERPROFILE\.ssh\id_rsa" -UserName $nestedLinuxUsername -ConnectingTimeout 60000 -ErrorAction Stop
         Invoke-Command -Session $UbuntuSessions -ScriptBlock {
             param([string]$Password)
