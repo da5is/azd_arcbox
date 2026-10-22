@@ -787,6 +787,49 @@ Describe 'ArcBox standalone artifact source' {
     }
 }
 
+Describe 'ArcBox nested DHCP DNS configuration' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $source = Get-Content (Join-Path $arcboxRoot 'artifacts\ArcServersLogonScript.ps1') -Raw
+        $start = $source.IndexOf('    $dhcpOptions = Get-DhcpServerv4OptionValue')
+        $end = $source.IndexOf('    # Set custom DNS', $start)
+        $dhcpConfiguration = [scriptblock]::Create($source.Substring($start, $end - $start))
+        function Get-DhcpServerv4OptionValue {}
+        function Set-DhcpServerv4OptionValue {
+            param($ComputerName, $DnsDomain, $DnsServer, $Router, [switch]$Force)
+        }
+    }
+    BeforeEach {
+        $savedFlavor = $env:flavor
+        $dnsClient = @{ ConnectionSpecificSuffix = 'test.internal' }
+        Mock Set-DhcpServerv4OptionValue {}
+    }
+    AfterEach { $env:flavor = $savedFlavor }
+    It 'advertises only the Azure resolver for ITPro even when three DHCP options already exist' {
+        $env:flavor = 'ITPro'
+        Mock Get-DhcpServerv4OptionValue { 1; 2; 3 }
+        & $dhcpConfiguration
+        Should -Invoke Set-DhcpServerv4OptionValue -Exactly -Times 1 -ParameterFilter {
+            @($DnsServer).Count -eq 1 -and $DnsServer[0] -eq '168.63.129.16' -and
+            $Router -eq '10.10.1.1' -and $DnsDomain -eq 'test.internal'
+        }
+    }
+    It 'preserves the DataOps domain-controller resolver on initial configuration' {
+        $env:flavor = 'DataOps'
+        Mock Get-DhcpServerv4OptionValue {}
+        & $dhcpConfiguration
+        Should -Invoke Set-DhcpServerv4OptionValue -Exactly -Times 1 -ParameterFilter {
+            @($DnsServer).Count -eq 2 -and $DnsServer -contains '168.63.129.16' -and $DnsServer -contains '10.16.2.100'
+        }
+    }
+    It 'does not reset existing DataOps DHCP configuration' {
+        $env:flavor = 'DataOps'
+        Mock Get-DhcpServerv4OptionValue { 1; 2; 3 }
+        & $dhcpConfiguration
+        Should -Invoke Set-DhcpServerv4OptionValue -Times 0
+    }
+}
+
 Describe 'ArcBox ITPro nested memory allocation' {
     It 'allocates 4 GB to Ubuntu SQL and 2 GB to the non-SQL guest' {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
@@ -1069,6 +1112,13 @@ Describe 'ArcBox SQL extension installation' {
     ) {
         $script:concurrentState = $State
         Mock az {
+            $global:LASTEXITCODE = 0
+            $script:listCalls++
+            if ($script:listCalls -gt 1) {
+                if ($script:listCalls -lt 4) { $script:concurrentState } else { 'Succeeded' }
+            }
+        } -ParameterFilter { $Arguments -contains 'tsv' }
+        Mock az {
             $global:LASTEXITCODE = 1
             'ERROR: (HCRP409) An extension of type WindowsAgent.SqlServer is still processing.'
         } -ParameterFilter { $Arguments -contains 'create' }
@@ -1086,7 +1136,61 @@ Describe 'ArcBox SQL extension installation' {
         Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly
         Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
         Should -Invoke az -Times 0 -ParameterFilter { $Arguments -contains 'update' -or $Arguments -contains 'delete' }
+        Should -Invoke Start-Sleep -Exactly -Times $(if ($State -eq 'Succeeded') { 0 } else { 2 })
         Test-Path (Join-Path $TestDrive 'SqlExtension-test-vm.json') | Should -BeFalse
+    }
+    It 'captures real native stderr under Stop error preference and recovers only HCRP409' {
+        $ErrorActionPreference = 'Stop'
+        Mock az {
+            & pwsh -NoProfile -Command '[Console]::Error.WriteLine("ERROR: (HCRP409) WindowsAgent.SqlServer is still processing."); exit 1'
+            $global:LASTEXITCODE = $LASTEXITCODE
+        } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az {
+            $global:LASTEXITCODE = 0
+            '{"properties":{"publisher":"Microsoft.AzureData","type":"WindowsAgent.SqlServer","provisioningState":"Creating"}}'
+        } -ParameterFilter { $Arguments -contains 'json' }
+        Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly
+        Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'json' }
+    }
+    It 'fails if a verified concurrent installation subsequently fails' {
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: HCRP409' } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az {
+            $global:LASTEXITCODE = 0
+            '{"properties":{"publisher":"Microsoft.AzureData","type":"WindowsAgent.SqlServer","provisioningState":"Creating"}}'
+        } -ParameterFilter { $Arguments -contains 'json' }
+        Mock az {
+            $global:LASTEXITCODE = 0
+            $script:listCalls++
+            if ($script:listCalls -gt 1) { 'Failed' }
+        } -ParameterFilter { $Arguments -contains 'tsv' }
+        { Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly } | Should -Throw "*state 'Failed'*"
+    }
+    It 'keeps visibility and completion polling within the same original deadline' {
+        $script:clock = [datetime]'2026-10-21'
+        $script:sleeps = 0
+        Mock Get-Date { $script:clock }
+        Mock Start-Sleep {
+            $script:sleeps++
+            $script:clock = $script:clock.AddSeconds($(if ($script:sleeps -eq 1) { 840 } else { 30 }))
+        }
+        $script:conflictReads = 0
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: HCRP409' } -ParameterFilter { $Arguments -contains 'create' }
+        Mock az {
+            $global:LASTEXITCODE = 0
+            $script:conflictReads++
+            if ($script:conflictReads -gt 1) {
+                '{"properties":{"publisher":"Microsoft.AzureData","type":"WindowsAgent.SqlServer","provisioningState":"Creating"}}'
+            }
+        } -ParameterFilter { $Arguments -contains 'json' }
+        Mock az {
+            $global:LASTEXITCODE = 0
+            $script:listCalls++
+            if ($script:listCalls -gt 1) { 'Creating' }
+        } -ParameterFilter { $Arguments -contains 'tsv' }
+        { Install-ArcBoxSqlExtension -MachineName test-vm -LicenseType LicenseOnly } | Should -Throw '*Timed out waiting*'
+        $script:clock | Should -Be ([datetime]'2026-10-21').AddMinutes(15)
+        $script:listCalls | Should -Be 3
+        Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
     }
     It 'allows a conflicting SQL installation to become visible before checking its publisher' {
         $script:conflictReads = 0

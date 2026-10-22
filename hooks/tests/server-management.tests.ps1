@@ -188,6 +188,37 @@ Describe 'Arc extension provisioning safeguards' {
         { Install-ArcBoxServerExtension -MachineName ubu24 -Name AzureMonitorLinuxAgent -Publisher Microsoft.Azure.Monitor } | Should -Throw '*AuthorizationFailed*'
         $script:reads | Should -Be 1
     }
+    It 'waits for a concurrently created AMA extension to become visible and then finish' {
+        $script:reads = 0
+        Mock Get-ArcBoxServerExtensions {
+            $script:reads++
+            if ($script:reads -ge 3) {
+                [pscustomobject]@{
+                    name = 'AzureMonitorWindowsAgent'
+                    properties = @{
+                        publisher = 'Microsoft.Azure.Monitor'
+                        provisioningState = $(if ($script:reads -lt 5) { 'Creating' } else { 'Succeeded' })
+                    }
+                }
+            }
+        }
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: (HCRP409) An extension is still processing.' }
+        Install-ArcBoxServerExtension -MachineName win22sql22 -Name AzureMonitorWindowsAgent -Publisher Microsoft.Azure.Monitor
+        $script:reads | Should -Be 5
+        Should -Invoke Start-Sleep -Exactly -Times 2
+        Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
+    }
+    It 'bounds the AMA conflict visibility wait without issuing another create' {
+        $script:clockReads = 0
+        Mock Get-Date {
+            $script:clockReads++
+            [datetime]'2026-01-01' + [timespan]::FromMinutes(21 * ($script:clockReads - 1))
+        }
+        Mock Get-ArcBoxServerExtensions {}
+        Mock az { $global:LASTEXITCODE = 1; 'ERROR: HCRP409' }
+        { Install-ArcBoxServerExtension -MachineName win22sql22 -Name AzureMonitorWindowsAgent -Publisher Microsoft.Azure.Monitor } | Should -Throw '*Timed out verifying concurrent*'
+        Should -Invoke az -Exactly -Times 1 -ParameterFilter { $Arguments -contains 'create' }
+    }
     It 'does not reuse a conflicting extension from a different publisher' {
         $script:reads = 0
         Mock Get-ArcBoxServerExtensions {

@@ -2,6 +2,37 @@
 set -euo pipefail
 umask 077
 
+download_sql_file() {
+    local url=$1 destination=$2 budget=$3
+    local deadline=$((SECONDS + budget)) remaining exit_code
+    while true; do
+        remaining=$((deadline - SECONDS))
+        if [ "$remaining" -le 0 ]; then
+            echo "Download timed out after ${budget}s: $url" >&2
+            return 28
+        fi
+        if curl --fail --location --connect-timeout 30 --max-time "$remaining" \
+            "$url" -o "$destination.download"; then
+            mv "$destination.download" "$destination"
+            return 0
+        else
+            exit_code=$?
+        fi
+        rm -f "$destination.download"
+        case "$exit_code" in
+            5|6|7|18|28|52|56) ;;
+            *) echo "Download failed (curl exit $exit_code): $url" >&2; return "$exit_code" ;;
+        esac
+        remaining=$((deadline - SECONDS))
+        if [ "$remaining" -le 0 ]; then
+            echo "Download timed out after ${budget}s (curl exit $exit_code): $url" >&2
+            return "$exit_code"
+        fi
+        echo "Transient download failure (curl exit $exit_code); retrying $url (${remaining}s left)." >&2
+        sleep "$((remaining < 5 ? remaining : 5))"
+    done
+}
+
 mode=${1:?Specify Developer or Evaluation}
 case "$mode" in
     Developer|Evaluation) ;;
@@ -23,14 +54,15 @@ test -n "$MSSQL_SA_PASSWORD"
 export MSSQL_SA_PASSWORD
 export SQLCMDPASSWORD="$MSSQL_SA_PASSWORD"
 export ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive
-trap 'if [ -n "${backup:-}" ]; then rm -f "$backup.download"; fi; unset MSSQL_SA_PASSWORD SQLCMDPASSWORD' EXIT
+signing_key=$(mktemp)
+trap 'rm -f "$signing_key" "$signing_key.download"; if [ -n "${backup:-}" ]; then rm -f "$backup.download"; fi; unset MSSQL_SA_PASSWORD SQLCMDPASSWORD' EXIT
 
-curl --fail --location --max-time 300 https://packages.microsoft.com/keys/microsoft.asc |
-    gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
-curl --fail --location --max-time 300 https://packages.microsoft.com/config/ubuntu/24.04/mssql-server-2025.list \
-    -o /etc/apt/sources.list.d/mssql-server-2025.list
-curl --fail --location --max-time 300 https://packages.microsoft.com/config/ubuntu/24.04/prod.list \
-    -o /etc/apt/sources.list.d/microsoft-prod.list
+download_sql_file https://packages.microsoft.com/keys/microsoft.asc "$signing_key" 300
+gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg "$signing_key"
+download_sql_file https://packages.microsoft.com/config/ubuntu/24.04/mssql-server-2025.list \
+    /etc/apt/sources.list.d/mssql-server-2025.list 300
+download_sql_file https://packages.microsoft.com/config/ubuntu/24.04/prod.list \
+    /etc/apt/sources.list.d/microsoft-prod.list 300
 timeout --kill-after=30s 30m apt-get -o DPkg::Lock::Timeout=300 update
 timeout --kill-after=30s 30m apt-get -o DPkg::Lock::Timeout=300 install -y mssql-server mssql-tools18 unixodbc-dev
 if [ ! -f /var/opt/mssql/data/master.mdf ]; then

@@ -139,6 +139,7 @@ function Install-ArcBoxServerExtension {
             throw "Existing extension '$Name' on '$MachineName' is failed; repair it before retrying."
         }
     }
+    $deadline = (Get-Date).AddMinutes(20)
     if ($extension.Count -eq 0) {
         $arguments = @('connectedmachine', 'extension', 'create', '--resource-group', $env:resourceGroup,
             '--machine-name', $MachineName, '--name', $Name, '--publisher', $Publisher, '--type', $Name,
@@ -155,18 +156,24 @@ function Install-ArcBoxServerExtension {
                 if (($createOutput -join "`n") -notmatch '\bHCRP409\b') {
                     throw "Could not create extension '$Name' on '$MachineName' (Azure CLI exit code $createExitCode): $($createOutput -join "`n")"
                 }
-                # Policy may have created the same extension after our initial read.
-                $concurrent = @(Get-ArcBoxServerExtensions -MachineName $MachineName | Where-Object { $_.name -eq $Name -and $_.properties.publisher -eq $Publisher })
-                if ($concurrent.Count -ne 1 -or $concurrent[0].properties.provisioningState -notin @('Creating', 'Updating', 'Succeeded')) {
-                    throw "Could not create extension '$Name' on '$MachineName' (Azure CLI exit code $createExitCode): $($createOutput -join "`n")"
-                }
+                do {
+                    $concurrent = @(Get-ArcBoxServerExtensions -MachineName $MachineName | Where-Object name -eq $Name)
+                    if ($concurrent.Count -gt 0) {
+                        if ($concurrent.Count -ne 1 -or $concurrent[0].properties.publisher -ne $Publisher -or
+                            $concurrent[0].properties.provisioningState -notin @('Creating', 'Updating', 'Succeeded')) {
+                            throw "Could not create extension '$Name' on '$MachineName' (Azure CLI exit code $createExitCode): $($createOutput -join "`n")"
+                        }
+                        break
+                    }
+                    Start-Sleep -Seconds 20
+                } while ((Get-Date) -lt $deadline)
+                if ($concurrent.Count -eq 0) { throw "Timed out verifying concurrent extension '$Name' on '$MachineName' after HCRP409." }
                 Write-Warning "Extension '$Name' on '$MachineName' was concurrently created; waiting for that deployment."
             }
         } finally {
             if (Test-Path -LiteralPath $settingsPath) { Remove-Item -LiteralPath $settingsPath -Force -ErrorAction Stop }
         }
     }
-    $deadline = (Get-Date).AddMinutes(20)
     do {
         $extension = @(Get-ArcBoxServerExtensions -MachineName $MachineName | Where-Object name -eq $Name)
         $state = if ($extension.Count -eq 1) { $extension[0].properties.provisioningState } else { '' }

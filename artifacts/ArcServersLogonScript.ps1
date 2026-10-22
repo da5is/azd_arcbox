@@ -257,10 +257,12 @@ if ($Env:flavor -ne 'DevOps') {
     }
 
     $dhcpOptions = Get-DhcpServerv4OptionValue
-    if ($dhcpOptions.Count -lt 3) {
+    $nestedDnsServers = @('168.63.129.16')
+    if ($Env:flavor -eq 'DataOps') { $nestedDnsServers += '10.16.2.100' }
+    if ($Env:flavor -eq 'ITPro' -or $dhcpOptions.Count -lt 3) {
         Set-DhcpServerv4OptionValue -ComputerName localhost `
             -DnsDomain $dnsClient.ConnectionSpecificSuffix `
-            -DnsServer 168.63.129.16, 10.16.2.100 `
+            -DnsServer $nestedDnsServers `
             -Router 10.10.1.1 `
             -Force
     }
