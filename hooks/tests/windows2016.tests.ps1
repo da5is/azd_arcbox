@@ -81,7 +81,13 @@ Describe 'Windows Server 2016 evaluation disk construction' {
             $FilePath -like '*\dism.exe' -and $ArgumentList -contains '/Index:2' -and $ArgumentList -contains '/CheckIntegrity'
         }
         Should -Invoke Start-Process -Exactly -Times 1 -ParameterFilter {
-            $FilePath -like '*\bcdboot.exe' -and $ArgumentList -contains 'UEFI'
+            $FilePath -eq 'TestDrive:\Windows\System32\bcdboot.exe' -and
+            $ArgumentList -contains '"TestDrive:\Windows"' -and
+            $ArgumentList -contains '/s' -and $ArgumentList -contains 'TestDrive:' -and
+            $ArgumentList -contains 'UEFI'
+        }
+        Should -Invoke Start-Process -Times 0 -ParameterFilter {
+            $FilePath -eq "$env:windir\System32\bcdboot.exe"
         }
         Should -Invoke Dismount-VHD -Exactly -Times 1
         Should -Invoke Dismount-DiskImage -Exactly -Times 1
@@ -117,12 +123,15 @@ Describe 'Windows Server 2016 evaluation disk construction' {
         Should -Invoke New-VHD -Times 0
         Should -Invoke Dismount-DiskImage -Exactly -Times 1
     }
-    It 'does not publish a disk after <Tool> fails and always detaches temporary media' -ForEach @(
-        @{ Tool = 'dism.exe' }, @{ Tool = 'bcdboot.exe' }
+    It 'does not publish a disk after <Tool> fails with <ExitCode> and always detaches temporary media' -ForEach @(
+        @{ Tool = 'dism.exe'; ExitCode = 50 },
+        @{ Tool = 'bcdboot.exe'; ExitCode = 50 },
+        @{ Tool = 'bcdboot.exe'; ExitCode = 193 }
     ) {
         $script:failingTool = $Tool
-        Mock Start-Process { New-TestProcess -ExitCode $(if ($FilePath.EndsWith($script:failingTool)) { 50 } else { 0 }) }
-        { Save-ArcBoxWindows2016Disk -DestinationPath $destination -Credential $credential } | Should -Throw '*exit code 50*'
+        $script:toolExitCode = $ExitCode
+        Mock Start-Process { New-TestProcess -ExitCode $(if ($FilePath.EndsWith($script:failingTool)) { $script:toolExitCode } else { 0 }) }
+        { Save-ArcBoxWindows2016Disk -DestinationPath $destination -Credential $credential } | Should -Throw "*exit code $ExitCode*"
         Test-Path -LiteralPath $destination | Should -BeFalse
         Test-Path -LiteralPath "$destination.building.vhdx" | Should -BeFalse
         Should -Invoke Dismount-VHD -Exactly -Times 1

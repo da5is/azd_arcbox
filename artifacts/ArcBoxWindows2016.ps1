@@ -76,7 +76,8 @@ function Save-ArcBoxWindows2016Disk {
         }
         $process.Refresh()
         if ($process.ExitCode -ne 0) { throw "Windows Server 2016 image application failed (DISM exit code $($process.ExitCode))." }
-        $process = Start-Process -FilePath "$env:windir\System32\bcdboot.exe" -ArgumentList @(
+        # Newer host BCDBoot can select EFI_EX files absent from the Server 2016 image.
+        $process = Start-Process -FilePath "${windowsRoot}Windows\System32\bcdboot.exe" -ArgumentList @(
             "`"${windowsRoot}Windows`"", '/s', "$($efi.DriveLetter):", '/f', 'UEFI'
         ) -PassThru -ErrorAction Stop
         if (-not $process.WaitForExit(300000)) {
