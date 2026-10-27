@@ -1,9 +1,9 @@
 BeforeDiscovery {
-    $VMs = @('win22sql22', 'ubu24sql25', 'ubu24', 'win19sql16', 'win22sql19', 'win25sql25')
+    $VMs = @('win22sql22', 'ubu24sql25', 'ubu24', 'win16sql16', 'win19sql19', 'win25sql25')
     $SqlVMs = @(
-        @{ Name = 'win19sql16'; MajorVersion = 13; DatabaseName = 'AdventureWorksLT2016' }
-        @{ Name = 'win22sql19'; MajorVersion = 15; DatabaseName = 'AdventureWorksLT2019' }
-        @{ Name = 'win25sql25'; MajorVersion = 17; DatabaseName = 'AdventureWorksLT2025' }
+        @{ Name = 'win16sql16'; WindowsVersion = '2016'; WindowsBuild = '14393'; MajorVersion = 13; DatabaseName = 'AdventureWorksLT2016' }
+        @{ Name = 'win19sql19'; WindowsVersion = '2019'; WindowsBuild = '17763'; MajorVersion = 15; DatabaseName = 'AdventureWorksLT2019' }
+        @{ Name = 'win25sql25'; WindowsVersion = '2025'; WindowsBuild = '26100'; MajorVersion = 17; DatabaseName = 'AdventureWorksLT2025' }
     )
 }
 
@@ -35,6 +35,13 @@ Describe "<vm>" -ForEach $VMs {
 
 Describe 'Nested SQL Server on <Name>' -ForEach $SqlVMs {
     BeforeAll { $sqlVM = $_ }
+    It 'runs Windows Server <WindowsVersion>, build <WindowsBuild>' {
+        $os = Invoke-Command -VMName $sqlVM.Name -Credential $managementCredentials -ErrorAction Stop -ScriptBlock {
+            Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Select-Object BuildNumber, Caption
+        }
+        $os.BuildNumber | Should -Be $sqlVM.WindowsBuild
+        $os.Caption | Should -Match "Windows Server $($sqlVM.WindowsVersion)\b"
+    }
     It 'has SQL Server major version <MajorVersion> and both sample databases' {
         $result = Invoke-Command -VMName $sqlVM.Name -Credential $managementCredentials -ErrorAction Stop -ScriptBlock {
             param($databaseName)
@@ -99,9 +106,14 @@ Describe 'Arc management on <_>' -ForEach $VMs {
         $LASTEXITCODE | Should -Be 0
         ($result -join '').Trim() | Should -Be $machine
         if ($os -eq 'Windows') {
-            $license = Invoke-Command -VMName $machine -Credential $managementCredentials -ErrorAction Stop -ScriptBlock {
+            $license = Invoke-Command -VMName $machine -Credential $managementCredentials -ArgumentList ($machine -eq 'win16sql16') -ErrorAction Stop -ScriptBlock {
+                param([bool]$Evaluation)
                 Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" |
-                    Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 -and $_.Description -like '*VOLUME_KMSCLIENT*' }
+                    Where-Object {
+                        $_.PartialProductKey -and $_.LicenseStatus -eq 1 -and
+                        (($Evaluation -and $_.Description -like '*TIMEBASED_EVAL*' -and $_.GracePeriodRemaining -gt 0) -or
+                         (-not $Evaluation -and $_.Description -like '*VOLUME_KMSCLIENT*'))
+                    }
             }
             @($license).Count | Should -BeGreaterThan 0
         }
@@ -163,7 +175,7 @@ SELECT CAST(SERVERPROPERTY('Edition') AS nvarchar(128));
 
 Describe 'Six-guest monitoring data and memory headroom' {
     It 'receives real inventory, test changes, OS logs and fresh OTel metrics from every guest' {
-        $windows = @('win22sql22', 'win19sql16', 'win22sql19', 'win25sql25')
+        $windows = @('win22sql22', 'win16sql16', 'win19sql19', 'win25sql25')
         $allMachines = $windows + @('ubu24sql25', 'ubu24')
         Wait-ArcBoxServerTelemetry -MachineNames $allMachines -InventoryOnly
         $probe = 'ArcBoxInventoryProbe' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -226,7 +238,7 @@ WHILE SYSDATETIME()<@until
         $jobs = @()
         $session = $null
         try {
-            $jobs += Invoke-Command -VMName @('win22sql22', 'win19sql16', 'win22sql19', 'win25sql25') -Credential $managementCredentials -AsJob -ArgumentList $query -ErrorAction Stop -ScriptBlock {
+            $jobs += Invoke-Command -VMName @('win22sql22', 'win16sql16', 'win19sql19', 'win25sql25') -Credential $managementCredentials -AsJob -ArgumentList $query -ErrorAction Stop -ScriptBlock {
                 param([string]$Query)
                 Import-Module SqlServer -ErrorAction Stop
                 Invoke-Sqlcmd -ServerInstance '.' -Query $Query -TrustServerCertificate -QueryTimeout 120 -ErrorAction Stop
@@ -253,7 +265,7 @@ WHILE SYSDATETIME()<@until
                 Receive-Job -Job $job -ErrorAction Stop | Out-Null
                 $job.State | Should -Be 'Completed'
             }
-            @(Get-VM -Name @('win22sql22', 'win19sql16', 'win22sql19', 'win25sql25', 'ubu24sql25', 'ubu24') | Where-Object State -ne Running).Count | Should -Be 0
+            @(Get-VM -Name @('win22sql22', 'win16sql16', 'win19sql19', 'win25sql25', 'ubu24sql25', 'ubu24') | Where-Object State -ne Running).Count | Should -Be 0
         } finally {
             foreach ($job in $jobs) {
                 if ($job.State -in @('Running', 'NotStarted')) { Stop-Job -Job $job -ErrorAction Stop }

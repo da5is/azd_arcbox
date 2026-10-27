@@ -3,13 +3,13 @@ properties:
 
   resources:
     - resource: HyperVDsc/VMHyperV
-      id: win19sql16
+      id: win16sql16
       directives:
-        description: Configure VM win19sql16
+        description: Configure VM win16sql16
       settings:
-        Name: win19sql16
+        Name: win16sql16
         SwitchName: 'InternalNATSwitch'
-        VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K19.vhdx
+        VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K16.vhdx
         ProcessorCount: 2
         StartupMemory: '4GB'
         RestartIfNeeded: true
@@ -19,13 +19,13 @@ properties:
         EnableGuestService: true
         SecureBoot: true
     - resource: HyperVDsc/VMHyperV
-      id: win22sql19
+      id: win19sql19
       directives:
-        description: Configure VM win22sql19
+        description: Configure VM win19sql19
       settings:
-        Name: win22sql19
+        Name: win19sql19
         SwitchName: 'InternalNATSwitch'
-        VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K22.vhdx
+        VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K19.vhdx
         ProcessorCount: 2
         StartupMemory: '4GB'
         RestartIfNeeded: true

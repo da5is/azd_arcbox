@@ -575,10 +575,14 @@ if ($Env:flavor -ne 'DevOps') {
     # Onboard nested Windows and Linux VMs to Azure Arc
     if ($Env:flavor -eq 'ITPro') {
         Write-Header 'Fetching Nested VMs'
+        if (@(Get-VM -ErrorAction Stop | Where-Object Name -in @('win19sql16', 'win22sql19')).Count -gt 0) {
+            throw 'The Windows guest OS changes require a new ITPro environment; existing win19sql16/win22sql19 guests cannot be converted in place.'
+        }
 
-        $Win19Sql16vmName = 'win19sql16'
+        . "$env:ArcBoxDir\ArcBoxWindows2016.ps1"
+        $Win16Sql16vmName = 'win16sql16'
 
-        $Win22Sql19vmName = 'win22sql19'
+        $Win19Sql19vmName = 'win19sql19'
 
         $Win25Sql25vmName = 'win25sql25'
 
@@ -589,7 +593,7 @@ if ($Env:flavor -ne 'DevOps') {
         $Ubuntu02vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Ubuntu-02.vhdx"
         $UbuntuVMNames = @($Ubuntu01vmName, $Ubuntu02vmName)
 
-        $files = 'ArcBox-Win2K19.vhdx;ArcBox-Win2K22.vhdx;ArcBox-Win2K25.vhdx;ArcBox-Ubuntu-01.vhdx;ArcBox-Ubuntu-02.vhdx;'
+        $files = 'ArcBox-Win2K19.vhdx;ArcBox-Win2K25.vhdx;ArcBox-Ubuntu-01.vhdx;ArcBox-Ubuntu-02.vhdx;'
 
         $DeploymentProgressString = 'Downloading and configuring nested VMs'
 
@@ -609,6 +613,8 @@ if ($Env:flavor -ne 'DevOps') {
             $destinationPath = Join-Path $Env:ArcBoxVMDir ($file -replace '^ArcBox', $namingPrefix)
             Save-ArcBoxGuestDisk -SourceName $file -DestinationPath $destinationPath
         }
+        $null = Update-AzTag -ResourceId "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -Operation Merge -Tag @{ DeploymentProgress = 'Building Windows Server 2016 evaluation guest image' } -ErrorAction Stop
+        Save-ArcBoxWindows2016Disk -DestinationPath "$Env:ArcBoxVMDir\$namingPrefix-Win2K16.vhdx" -Credential $winCreds
 
         # Update disk IOPS and throughput after downloading nested VMs (note: a disk's performance tier can be downgraded only once every 12 hours)
         az disk update --resource-group $env:resourceGroup --name $existingVMDisk.Name --disk-iops-read-write $existingVMDisk.DiskIOPSReadWrite --disk-mbps-read-write $existingVMDisk.DiskMBpsReadWrite
@@ -622,28 +628,30 @@ if ($Env:flavor -ne 'DevOps') {
             throw "ITPro guest configuration failed (WinGet exit code $LASTEXITCODE)."
         }
 
-        foreach ($vmName in @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName, $Ubuntu01vmName, $Ubuntu02vmName)) {
+        Initialize-ArcBoxWindows2016Guest -Credential $winCreds -MediaDirectory $Env:ArcBoxVMDir
+
+        foreach ($vmName in @($SQLvmName, $Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName, $Ubuntu01vmName, $Ubuntu02vmName)) {
             Set-ArcBoxGuestLifecycle -VMName $vmName
         }
 
         Write-Header 'Creating VM Credentials'
         # Use the shared ArcBox password for all nested guest accounts.
         $nestedLinuxUsername = 'jumpstart'
-        foreach ($vmName in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
+        foreach ($vmName in @($Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName)) {
             $null = Set-ArcBoxWindowsGuestPassword -VMName $vmName -Password $nestedGuestPassword
         }
 
         # Restarting Windows VM Network Adapters
         Write-Header 'Restarting Network Adapters'
         Start-Sleep -Seconds 5
-        Invoke-Command -VMName $Win19Sql16vmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
-        Invoke-Command -VMName $Win22Sql19vmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
+        Invoke-Command -VMName $Win16Sql16vmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
+        Invoke-Command -VMName $Win19Sql19vmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
         Invoke-Command -VMName $Win25Sql25vmName -ScriptBlock { Get-NetAdapter | Restart-NetAdapter } -Credential $winCreds
         Start-Sleep -Seconds 10
 
         # Rename the nested Windows guests to names that include their OS and SQL Server versions.
         Write-Header 'Renaming the nested Windows VMs'
-        $windowsVMNames = @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)
+        $windowsVMNames = @($Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName)
         $windowsVMsToRestart = foreach ($vmName in $windowsVMNames) {
             $renameRequired = Invoke-Command -VMName $vmName -ScriptBlock {
                 if ($env:computername -ine $using:vmName) {
@@ -710,18 +718,18 @@ if ($Env:flavor -ne 'DevOps') {
 
         # Copy installation script to nested Windows VMs
         Write-Output 'Transferring installation script to nested Windows VMs...'
-        Copy-VMFile $Win19Sql16vmName -SourcePath "$agentScript\installArcAgent.ps1" -DestinationPath "$Env:ArcBoxDir\installArcAgent.ps1" -CreateFullPath -FileSource Host -Force
-        Copy-VMFile $Win22Sql19vmName -SourcePath "$agentScript\installArcAgent.ps1" -DestinationPath "$Env:ArcBoxDir\installArcAgent.ps1" -CreateFullPath -FileSource Host -Force
+        Copy-VMFile $Win16Sql16vmName -SourcePath "$agentScript\installArcAgent.ps1" -DestinationPath "$Env:ArcBoxDir\installArcAgent.ps1" -CreateFullPath -FileSource Host -Force
+        Copy-VMFile $Win19Sql19vmName -SourcePath "$agentScript\installArcAgent.ps1" -DestinationPath "$Env:ArcBoxDir\installArcAgent.ps1" -CreateFullPath -FileSource Host -Force
         Copy-VMFile $Win25Sql25vmName -SourcePath "$agentScript\installArcAgent.ps1" -DestinationPath "$Env:ArcBoxDir\installArcAgent.ps1" -CreateFullPath -FileSource Host -Force
-        Copy-VMFile $Win19Sql16vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -DestinationPath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -CreateFullPath -FileSource Host -Force
-        Copy-VMFile $Win22Sql19vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -DestinationPath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -CreateFullPath -FileSource Host -Force
+        Copy-VMFile $Win16Sql16vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -DestinationPath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -CreateFullPath -FileSource Host -Force
+        Copy-VMFile $Win19Sql19vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -DestinationPath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -CreateFullPath -FileSource Host -Force
         Copy-VMFile $Win25Sql25vmName -SourcePath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -DestinationPath "$Env:ArcBoxDir\InstallNestedSqlServer.ps1" -CreateFullPath -FileSource Host -Force
 
         Write-Header 'Installing SQL Server on nested Windows VMs'
         $sqlMode = if ([string]::IsNullOrWhiteSpace($Env:nestedSqlMode)) { 'Developer' } else { $Env:nestedSqlMode }
         foreach ($sqlGuest in @(
-            @{ Name = $Win19Sql16vmName; Version = '2016' }
-            @{ Name = $Win22Sql19vmName; Version = '2019' }
+            @{ Name = $Win16Sql16vmName; Version = '2016' }
+            @{ Name = $Win19Sql19vmName; Version = '2019' }
             @{ Name = $Win25Sql25vmName; Version = '2025' }
         )) {
             $tags = Get-AzResourceGroup -Name $resourceGroup -ErrorAction Stop | Select-Object -ExpandProperty Tags
@@ -771,7 +779,8 @@ if ($Env:flavor -ne 'DevOps') {
         Copy-ArcBoxLinuxGuestFile -VMName $UbuntuVMNames -SourcePath "$agentScript\installArcAgentModifiedUbuntu.sh" -DestinationDirectory "/home/$nestedLinuxUsername"
 
         Write-Output 'Activating operating system on Windows VMs...'
-        foreach ($vmName in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
+        Set-ArcBoxWindows2016EvaluationActivation -Credential $winCreds
+        foreach ($vmName in @($Win19Sql19vmName, $Win25Sql25vmName)) {
             Set-ArcBoxWindowsActivation -VMName $vmName -Credential $winCreds
         }
 
@@ -779,13 +788,13 @@ if ($Env:flavor -ne 'DevOps') {
 
         # Onboarding the nested VMs as Azure Arc-enabled servers
         Write-Output 'Onboarding the nested Windows VMs as Azure Arc-enabled servers'
-        Invoke-Command -VMName $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName -ScriptBlock {
+        Invoke-Command -VMName $Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName -ScriptBlock {
             $ErrorActionPreference = 'Stop'
             & "$Using:nestedVMArcBoxDir\installArcAgent.ps1" -accessToken $using:accessToken -tenantId $Using:tenantId -subscriptionId $Using:subscriptionId -resourceGroup $Using:resourceGroup -azureLocation $Using:azureLocation
         } -Credential $winCreds -ErrorAction Stop
 
         Write-Header 'Installing SQL Server extensions on Arc-enabled Windows VMs'
-        foreach ($additionalSqlMachine in @($Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)) {
+        foreach ($additionalSqlMachine in @($Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName)) {
             Install-ArcBoxSqlExtension -MachineName $additionalSqlMachine -LicenseType LicenseOnly
         }
 
@@ -828,9 +837,9 @@ if ($Env:flavor -ne 'DevOps') {
             $Ubuntu01vmName = $sqlSession
             $Ubuntu02vmName = $UbuntuSessions | Where-Object ComputerName -eq $Ubuntu02VmIp
         }
-        Set-ArcBoxServerManagement -WindowsMachines @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName) -LinuxMachines $UbuntuVMNames -LinuxSessions $linuxManagementSessions
+        Set-ArcBoxServerManagement -WindowsMachines @($SQLvmName, $Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName) -LinuxMachines $UbuntuVMNames -LinuxSessions $linuxManagementSessions
         $sshPublicKey = Get-Content "$Env:USERPROFILE\.ssh\id_rsa.pub" -Raw -ErrorAction Stop
-        Invoke-Command -VMName @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName) -Credential $winCreds -ArgumentList $sshPublicKey -ErrorAction Stop -ScriptBlock {
+        Invoke-Command -VMName @($SQLvmName, $Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName) -Credential $winCreds -ArgumentList $sshPublicKey -ErrorAction Stop -ScriptBlock {
             param([string]$PublicKey)
             $ErrorActionPreference = 'Stop'
             $path = "$env:ProgramData\ssh\administrators_authorized_keys"
@@ -855,7 +864,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'
-        $VMs = @($SQLvmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)
+        $VMs = @($SQLvmName, $Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName)
         $VMs | ForEach-Object -Parallel {
 
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
@@ -870,7 +879,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Header 'Enabling SSH access and triggering update assessment for Arc-enabled servers'
-        $VMs = @($SQLvmName, $Ubuntu01vmName, $Ubuntu02vmName, $Win19Sql16vmName, $Win22Sql19vmName, $Win25Sql25vmName)
+        $VMs = @($SQLvmName, $Ubuntu01vmName, $Ubuntu02vmName, $Win16Sql16vmName, $Win19Sql19vmName, $Win25Sql25vmName)
         $VMs | ForEach-Object -Parallel {
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
 

@@ -370,7 +370,7 @@ Describe 'Six-machine management orchestration' {
         Mock Set-ArcBoxBaselineAudit {}
         Mock Invoke-ArcBoxServerAz {}
         Mock Invoke-AzRestMethod { @{ StatusCode = 200 } }
-        Set-ArcBoxServerManagement -WindowsMachines @('win22sql22', 'win19sql16', 'win22sql19', 'win25sql25') -LinuxMachines @('ubu24sql25', 'ubu24')
+        Set-ArcBoxServerManagement -WindowsMachines @('win22sql22', 'win16sql16', 'win19sql19', 'win25sql25') -LinuxMachines @('ubu24sql25', 'ubu24')
         Should -Invoke Install-ArcBoxServerExtension -Times 4 -Exactly -ParameterFilter { $Name -eq 'WindowsOpenSSH' -and $MachineName -like 'win*' }
         Should -Invoke Install-ArcBoxServerExtension -Times 0 -Exactly -ParameterFilter { $Name -eq 'WindowsOpenSSH' -and $MachineName -like 'ubu*' }
         Should -Invoke Install-ArcBoxServerExtension -Times 6 -Exactly -ParameterFilter { $Name -like 'AzureMonitor*Agent' }
@@ -381,7 +381,7 @@ Describe 'Six-machine management orchestration' {
     }
     It 'rejects duplicate targets before making any cloud changes' {
         Mock Install-ArcBoxServerExtension {}
-        { Set-ArcBoxServerManagement -WindowsMachines @('win25sql25', 'win19sql16', 'win22sql19', 'win25sql25') -LinuxMachines @('ubu24sql25', 'ubu24') } | Should -Throw '*unique machine names*'
+        { Set-ArcBoxServerManagement -WindowsMachines @('win25sql25', 'win16sql16', 'win19sql19', 'win25sql25') -LinuxMachines @('ubu24sql25', 'ubu24') } | Should -Throw '*unique machine names*'
         Should -Invoke Install-ArcBoxServerExtension -Times 0
     }
     It 'preserves the prebuilt SQL target through the actual caller loop and management invocation' {
@@ -396,8 +396,8 @@ Describe 'Six-machine management orchestration' {
             $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Set-ArcBoxServerManagement'
         }, $true)
         $SQLvmName = 'win22sql22'
-        $Win19Sql16vmName = 'win19sql16'
-        $Win22Sql19vmName = 'win22sql19'
+        $Win16Sql16vmName = 'win16sql16'
+        $Win19Sql19vmName = 'win19sql19'
         $Win25Sql25vmName = 'win25sql25'
         $UbuntuVMNames = @('ubu24sql25', 'ubu24')
         $Ubuntu01vmName = 'ubu24sql25'
@@ -423,6 +423,8 @@ Describe 'Six-machine management orchestration' {
         $script:actualTargets.Count | Should -Be 6
         @($script:actualTargets | Sort-Object -Unique).Count | Should -Be 6
         $script:actualTargets | Should -Contain 'win22sql22'
+        $script:actualTargets | Should -Contain 'win16sql16'
+        $script:actualTargets | Should -Contain 'win19sql19'
     }
 }
 
@@ -438,7 +440,7 @@ Describe 'Explicit audit baseline guest assignment' {
             $body.properties.guestConfiguration.configurationParameter[0].value | Should -Be 'built-in-defaults'
             @{ StatusCode = 201 }
         }
-        Set-ArcBoxBaselineAudit -MachineName win19sql16 -OS Windows
+        Set-ArcBoxBaselineAudit -MachineName win16sql16 -OS Windows
         Should -Invoke Invoke-AzRestMethod -Exactly -Times 1
     }
     It 'preserves existing baseline assignments' {
@@ -450,16 +452,16 @@ Describe 'Explicit audit baseline guest assignment' {
     It 'reads the actual per-machine report instead of a collection that omits explicit assignments' {
         Mock Invoke-AzRestMethod { @{ StatusCode = 200; Content = '{"name":"AzureWindowsBaseline","properties":{"complianceStatus":"NonCompliant"}}' } }
         Mock Invoke-ArcBoxServerAz { throw 'Must not use the incomplete assignment collection.' }
-        Wait-ArcBoxBaselineReport -MachineName win19sql16 -OS Windows | Should -Be 'NonCompliant'
+        Wait-ArcBoxBaselineReport -MachineName win16sql16 -OS Windows | Should -Be 'NonCompliant'
         Should -Invoke Invoke-AzRestMethod -Exactly -Times 1 -ParameterFilter { $Method -eq 'GET' -and $Path -like '*/guestConfigurationAssignments/AzureWindowsBaseline?api-version=*' }
     }
     It 'treats only an actual 404 as a missing assignment' {
         Mock Invoke-AzRestMethod { @{ StatusCode = 404 } }
-        Get-ArcBoxBaselineAssignment -MachineName win19sql16 -OS Windows | Should -BeNullOrEmpty
+        Get-ArcBoxBaselineAssignment -MachineName win16sql16 -OS Windows | Should -BeNullOrEmpty
         Mock Invoke-AzRestMethod { @{ StatusCode = 403 } }
-        { Get-ArcBoxBaselineAssignment -MachineName win19sql16 -OS Windows } | Should -Throw '*HTTP 403*'
+        { Get-ArcBoxBaselineAssignment -MachineName win16sql16 -OS Windows } | Should -Throw '*HTTP 403*'
         Mock Invoke-AzRestMethod { throw 'Transport unavailable' }
-        { Get-ArcBoxBaselineAssignment -MachineName win19sql16 -OS Windows } | Should -Throw '*Transport unavailable*'
+        { Get-ArcBoxBaselineAssignment -MachineName win16sql16 -OS Windows } | Should -Throw '*Transport unavailable*'
     }
 }
 

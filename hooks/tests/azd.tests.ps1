@@ -203,9 +203,9 @@ Describe 'ArcBox Evaluation artifact preflight' {
 
     It 'accepts matching published scripts and deployed checks' {
         Assert-ArcBoxSqlArtifacts
-        $script:artifactRequests.Count | Should -Be 11
+        $script:artifactRequests.Count | Should -Be 12
         $script:artifactRequests[0] | Should -Be 'https://raw.githubusercontent.com/da5is/azd_arcbox/main/artifacts/Bootstrap.ps1'
-        Should -Invoke Invoke-WebRequest -Exactly -Times 11 -ParameterFilter { $TimeoutSec -eq 30 -and $ErrorAction -eq 'Stop' }
+        Should -Invoke Invoke-WebRequest -Exactly -Times 12 -ParameterFilter { $TimeoutSec -eq 30 -and $ErrorAction -eq 'Stop' }
     }
     It 'uses the configured public account and branch' {
         $env:JS_GITHUB_ACCOUNT = 'test-owner'
@@ -228,6 +228,7 @@ Describe 'ArcBox Evaluation artifact preflight' {
         @{ artifact = 'Invoke-Test.ps1' },
         @{ artifact = 'ArcServersLogonScript.ps1' },
         @{ artifact = 'InstallNestedSqlServer.ps1' },
+        @{ artifact = 'ArcBoxWindows2016.ps1' },
         @{ artifact = 'InstallNestedSqlServerUbuntu.sh' },
         @{ artifact = 'installArcAgentUbuntu.sh' },
         @{ artifact = 'ArcBoxServerManagement.ps1' },
@@ -901,8 +902,8 @@ Describe 'ArcBox guest provisioning safeguards' {
         }, $true)
         $loop | Should -Not -BeNullOrEmpty
         $SQLvmName = 'win22sql22'
-        $Win19Sql16vmName = 'win19sql16'
-        $Win22Sql19vmName = 'win22sql19'
+        $Win16Sql16vmName = 'win16sql16'
+        $Win19Sql19vmName = 'win19sql19'
         $Win25Sql25vmName = 'win25sql25'
         $Ubuntu01vmName = 'test-Ubuntu-01'
         $Ubuntu02vmName = 'test-Ubuntu-02'
@@ -914,8 +915,8 @@ Describe 'ArcBox guest provisioning safeguards' {
         & ([scriptblock]::Create($loop.Extent.Text))
         $script:configuredGuests.Count | Should -Be 6
         $script:configuredGuests | Should -Contain 'win22sql22'
-        $script:configuredGuests | Should -Contain 'win19sql16'
-        $script:configuredGuests | Should -Contain 'win22sql19'
+        $script:configuredGuests | Should -Contain 'win16sql16'
+        $script:configuredGuests | Should -Contain 'win19sql19'
         $script:configuredGuests | Should -Contain 'win25sql25'
         $source | Should -Not -Match 'Stop-VM[^\r\n]+-TurnOff'
     }
