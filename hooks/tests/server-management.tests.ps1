@@ -445,15 +445,27 @@ Describe 'Explicit audit baseline guest assignment' {
     }
     It 'preserves existing baseline assignments' {
         Mock Get-ArcBoxBaselineAssignment { @{ name = 'AzureWindowsBaseline' } }
+        Mock Get-ArcBoxBaselineReport { @{ properties = @{ complianceStatus = 'NonCompliant' } } }
         Mock Invoke-AzRestMethod { throw 'Must not replace an existing assignment.' }
         Set-ArcBoxBaselineAudit -MachineName win22sql22 -OS Windows
         Should -Invoke Invoke-AzRestMethod -Times 0
     }
     It 'reads the actual per-machine report instead of a collection that omits explicit assignments' {
-        Mock Invoke-AzRestMethod { @{ StatusCode = 200; Content = '{"name":"AzureWindowsBaseline","properties":{"complianceStatus":"NonCompliant"}}' } }
-        Mock Invoke-ArcBoxServerAz { throw 'Must not use the incomplete assignment collection.' }
+        $script:reportId = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/win16sql16/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments/AzureWindowsBaseline/reports/current-report"
+        Mock Invoke-AzRestMethod {
+            $content = if ($Path -like '*/reports/*') {
+                @{ properties = @{ complianceStatus = 'NonCompliant'; vm = @{ uuid = 'current-vm' } } }
+            } else {
+                @{ name = 'AzureWindowsBaseline'; properties = @{ complianceStatus = 'Pending'; latestReportId = $script:reportId } }
+            }
+            @{ StatusCode = 200; Content = ($content | ConvertTo-Json -Depth 10) }
+        }
+        Mock Invoke-ArcBoxServerAz { '{"properties":{"vmId":"current-vm"}}' } -ParameterFilter {
+            $Arguments[0] -eq 'rest' -and $Arguments[4] -like '*/machines/win16sql16?api-version=*'
+        }
         Wait-ArcBoxBaselineReport -MachineName win16sql16 -OS Windows | Should -Be 'NonCompliant'
         Should -Invoke Invoke-AzRestMethod -Exactly -Times 1 -ParameterFilter { $Method -eq 'GET' -and $Path -like '*/guestConfigurationAssignments/AzureWindowsBaseline?api-version=*' }
+        Should -Invoke Invoke-AzRestMethod -Exactly -Times 1 -ParameterFilter { $Method -eq 'GET' -and $Path -eq "$script:reportId`?api-version=2024-04-05" }
     }
     It 'treats only an actual 404 as a missing assignment' {
         Mock Invoke-AzRestMethod { @{ StatusCode = 404 } }
@@ -462,6 +474,117 @@ Describe 'Explicit audit baseline guest assignment' {
         { Get-ArcBoxBaselineAssignment -MachineName win16sql16 -OS Windows } | Should -Throw '*HTTP 403*'
         Mock Invoke-AzRestMethod { throw 'Transport unavailable' }
         { Get-ArcBoxBaselineAssignment -MachineName win16sql16 -OS Windows } | Should -Throw '*Transport unavailable*'
+    }
+}
+
+Describe 'Audit baselines after recreating an Arc machine' {
+    BeforeEach {
+        $script:assignmentPath = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/win25sql25/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments/AzureWindowsBaseline"
+        $script:baseline = [pscustomobject]@{
+            name = 'AzureWindowsBaseline'
+            location = 'test-region'
+            properties = @{
+                context = 'Policy'
+                complianceStatus = 'NonCompliant'
+                latestReportId = "$script:assignmentPath/reports/previous-report"
+                guestConfiguration = @{
+                    name = 'AzureWindowsBaseline'
+                    version = '1.*'
+                    assignmentType = 'Audit'
+                    configurationParameter = @(@{ name = 'AzureWindowsBaseline;BaselineSettings'; value = 'existing-settings' })
+                    configurationSetting = @{ configurationMode = 'MonitorOnly'; refreshFrequencyMins = 5 }
+                }
+            }
+        }
+        Mock Get-ArcBoxBaselineAssignment { $script:baseline }
+        Mock Invoke-ArcBoxServerAz { '{"properties":{"vmId":"current-vm"}}' }
+        Mock Invoke-AzRestMethod { @{ StatusCode = 404 } } -ParameterFilter { $Method -eq 'GET' }
+        Mock Invoke-AzRestMethod { @{ StatusCode = 200 } } -ParameterFilter { $Method -eq 'PUT' }
+        Mock Start-Sleep {}
+    }
+    It 're-registers an orphaned <Status> audit assignment with a report <ReportState> without changing its settings' -ForEach @(
+        @{ Status = 'Pending'; ReportState = 'absent' },
+        @{ Status = 'NonCompliant'; ReportState = 'absent' },
+        @{ Status = 'NonCompliant'; ReportState = 'from the previous VM' }
+    ) {
+        $script:baseline.properties.complianceStatus = $Status
+        if ($ReportState -ne 'absent') {
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 200; Content = '{"properties":{"complianceStatus":"NonCompliant","vm":{"uuid":"previous-vm"}}}' }
+            } -ParameterFilter { $Method -eq 'GET' }
+        }
+        Set-ArcBoxBaselineAudit -MachineName win25sql25 -OS Windows
+        Should -Invoke Invoke-AzRestMethod -Exactly -Times 1 -ParameterFilter {
+            if ($Method -ne 'PUT') { return $false }
+            $body = $Payload | ConvertFrom-Json
+            $Method -eq 'PUT' -and $Path -eq "$script:assignmentPath`?api-version=2024-04-05" -and
+                $body.location -eq 'test-region' -and $body.properties.context -eq 'Policy' -and
+                $body.properties.guestConfiguration.assignmentType -eq 'Audit' -and
+                $body.properties.guestConfiguration.version -eq '1.*' -and
+                $body.properties.guestConfiguration.configurationParameter[0].value -eq 'existing-settings' -and
+                $body.properties.guestConfiguration.configurationSetting.configurationMode -eq 'MonitorOnly'
+        }
+        Should -Invoke Invoke-ArcBoxServerAz -Exactly -Times $(if ($ReportState -eq 'absent') { 0 } else { 1 })
+    }
+    It 'does not replace a healthy assignment backed by a report for the current VM identity' {
+        Mock Invoke-AzRestMethod {
+            @{ StatusCode = 200; Content = '{"properties":{"complianceStatus":"NonCompliant","vm":{"uuid":"current-vm"}}}' }
+        } -ParameterFilter { $Method -eq 'GET' }
+        Set-ArcBoxBaselineAudit -MachineName win25sql25 -OS Windows
+        Should -Invoke Invoke-AzRestMethod -Times 0 -ParameterFilter { $Method -eq 'PUT' }
+    }
+    It 'reasserts a pending audit assignment with no report once during setup' {
+        $script:baseline.properties.latestReportId = $null
+        Set-ArcBoxBaselineAudit -MachineName win25sql25 -OS Windows
+        Should -Invoke Invoke-AzRestMethod -Exactly -Times 1 -ParameterFilter { $Method -eq 'PUT' }
+        Should -Invoke Invoke-AzRestMethod -Times 0 -ParameterFilter { $Method -eq 'GET' }
+    }
+    It 'refuses to repair an orphaned applying-mode assignment' {
+        $script:baseline.properties.guestConfiguration.assignmentType = 'ApplyAndAutoCorrect'
+        { Set-ArcBoxBaselineAudit -MachineName win25sql25 -OS Windows } | Should -Throw '*not Audit-only*'
+        Should -Invoke Invoke-AzRestMethod -Times 0 -ParameterFilter { $Method -eq 'PUT' }
+    }
+    It 'does not treat report HTTP <Status> as permission to re-register' -ForEach @(
+        @{ Status = 403 }, @{ Status = 500 }
+    ) {
+        $script:httpStatus = $Status
+        Mock Invoke-AzRestMethod { @{ StatusCode = $script:httpStatus } } -ParameterFilter { $Method -eq 'GET' }
+        { Set-ArcBoxBaselineAudit -MachineName win25sql25 -OS Windows } | Should -Throw "*HTTP $Status*"
+        Should -Invoke Invoke-AzRestMethod -Times 0 -ParameterFilter { $Method -eq 'PUT' }
+    }
+    It 'surfaces re-registration failure' {
+        Mock Invoke-AzRestMethod { @{ StatusCode = 403 } } -ParameterFilter { $Method -eq 'PUT' }
+        { Set-ArcBoxBaselineAudit -MachineName win25sql25 -OS Windows } | Should -Throw '*HTTP 403*'
+    }
+    It 'rejects a stale evaluated summary when its report is <ReportState>' -ForEach @(
+        @{ ReportState = 'absent' }, @{ ReportState = 'from the previous VM' }
+    ) {
+        if ($ReportState -ne 'absent') {
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 200; Content = '{"properties":{"complianceStatus":"NonCompliant","vm":{"uuid":"previous-vm"}}}' }
+            } -ParameterFilter { $Method -eq 'GET' }
+        }
+        $script:clock = 0
+        Mock Get-Date {
+            $script:clock++
+            [datetime]'2026-01-01' + [timespan]::FromMinutes(31 * ($script:clock - 1))
+        }
+        { Wait-ArcBoxBaselineReport -MachineName win25sql25 -OS Windows } | Should -Throw '*No evaluated Windows baseline report*'
+    }
+    It 'accepts a real current-VM report only after the guest actually evaluates it' {
+        $script:reads = 0
+        Mock Invoke-AzRestMethod {
+            $script:reads++
+            $status = if ($script:reads -eq 1) { 'Pending' } else { 'NonCompliant' }
+            @{ StatusCode = 200; Content = (@{ properties = @{ complianceStatus = $status; vm = @{ uuid = 'current-vm' } } } | ConvertTo-Json -Depth 5) }
+        } -ParameterFilter { $Method -eq 'GET' }
+        Wait-ArcBoxBaselineReport -MachineName win25sql25 -OS Windows | Should -Be 'NonCompliant'
+        Should -Invoke Start-Sleep -Exactly -Times 1
+    }
+    It 'refuses a report reference belonging to another assignment' {
+        $script:baseline.properties.latestReportId = "$script:assignmentPath-other/reports/previous-report"
+        { Get-ArcBoxBaselineReport -MachineName win25sql25 -OS Windows -Assignment $script:baseline } | Should -Throw '*does not belong*'
+        Should -Invoke Invoke-AzRestMethod -Times 0
     }
 }
 

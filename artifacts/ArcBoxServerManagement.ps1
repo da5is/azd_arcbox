@@ -236,52 +236,98 @@ function Set-ArcBoxBaselineAudit {
 
     $machineId = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName"
     $assignmentPath = "$machineId/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments"
-    if ($null -ne (Get-ArcBoxBaselineAssignment -MachineName $MachineName -OS $OS)) { return }
-
-    $definitionId = if ($OS -eq 'Windows') { '72650e9f-97bc-4b2a-ab5f-9781a9fcecbc' } else { 'fc9b3da7-8347-4380-8e70-0a0361d8dedd' }
-    $definition = Invoke-ArcBoxServerAz -Arguments @('policy', 'definition', 'show', '--name', $definitionId, '--output', 'json') | ConvertFrom-Json
-    $metadata = $definition.metadata.guestConfiguration
-    if ($metadata.name -ne "Azure${OS}Baseline" -or [string]::IsNullOrWhiteSpace($metadata.version)) { throw "The $OS built-in baseline metadata is invalid." }
-    $parameters = @($metadata.configurationParameter.PSObject.Properties | ForEach-Object {
-        $parameter = $definition.parameters.($_.Name)
-        if ($null -eq $parameter -or $null -eq $parameter.defaultValue) { throw "The built-in baseline parameter '$($_.Name)' has no default." }
-        @{ name = $_.Value; value = $parameter.defaultValue }
-    })
-    $payload = @{
-        properties = @{
-            context = 'AzurePolicy'
-            guestConfiguration = @{
-                name = $metadata.name
-                version = $metadata.version
-                assignmentType = 'Audit'
-                configurationParameter = $parameters
+    $existing = Get-ArcBoxBaselineAssignment -MachineName $MachineName -OS $OS
+    if ($null -ne $existing) {
+        if ($null -ne (Get-ArcBoxBaselineReport -MachineName $MachineName -OS $OS -Assignment $existing)) { return }
+        if ($existing.properties.guestConfiguration.assignmentType -ne 'Audit') {
+            throw "Baseline assignment on '$MachineName' has no current-VM report and is not Audit-only; refusing to replace its settings."
+        }
+        Write-Warning "Re-registering the $OS audit baseline on $MachineName because it has no current-VM report, without changing its configuration."
+        $payload = @{
+            name = $existing.name
+            location = $existing.location
+            properties = @{
+                context = $existing.properties.context
+                guestConfiguration = $existing.properties.guestConfiguration
             }
         }
-    } | ConvertTo-Json -Depth 15
-    $response = Invoke-AzRestMethod -Method PUT -Path "$assignmentPath/$($metadata.name)?api-version=2024-04-05" -Payload $payload -ErrorAction Stop
+    } else {
+        $definitionId = if ($OS -eq 'Windows') { '72650e9f-97bc-4b2a-ab5f-9781a9fcecbc' } else { 'fc9b3da7-8347-4380-8e70-0a0361d8dedd' }
+        $definition = Invoke-ArcBoxServerAz -Arguments @('policy', 'definition', 'show', '--name', $definitionId, '--output', 'json') | ConvertFrom-Json
+        $metadata = $definition.metadata.guestConfiguration
+        if ($metadata.name -ne "Azure${OS}Baseline" -or [string]::IsNullOrWhiteSpace($metadata.version)) { throw "The $OS built-in baseline metadata is invalid." }
+        $parameters = @($metadata.configurationParameter.PSObject.Properties | ForEach-Object {
+            $parameter = $definition.parameters.($_.Name)
+            if ($null -eq $parameter -or $null -eq $parameter.defaultValue) { throw "The built-in baseline parameter '$($_.Name)' has no default." }
+            @{ name = $_.Value; value = $parameter.defaultValue }
+        })
+        $payload = @{
+            properties = @{
+                context = 'AzurePolicy'
+                guestConfiguration = @{
+                    name = $metadata.name
+                    version = $metadata.version
+                    assignmentType = 'Audit'
+                    configurationParameter = $parameters
+                }
+            }
+        }
+    }
+    $response = Invoke-AzRestMethod -Method PUT -Path "$assignmentPath/Azure${OS}Baseline?api-version=2024-04-05" -Payload ($payload | ConvertTo-Json -Depth 20) -ErrorAction Stop
     if ($response.StatusCode -notin @(200, 201, 202)) { throw "Could not create the audit-only baseline assignment on '$MachineName' (HTTP $($response.StatusCode))." }
+}
+
+function Get-ArcBoxGuestConfigurationResource {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$MachineName)
+
+    try {
+        $response = Invoke-AzRestMethod -Method GET -Path $Path -ErrorAction Stop
+    } catch {
+        $httpResponse = $_.Exception.PSObject.Properties['Response']
+        if ($null -ne $httpResponse -and $null -ne $httpResponse.Value -and $httpResponse.Value.StatusCode -eq 404) {
+            Write-Host "Machine Configuration resource is absent on ${MachineName}: $Path"
+            return $null
+        }
+        throw
+    }
+    if ($response.StatusCode -eq 404) {
+        Write-Host "Machine Configuration resource is absent on ${MachineName}: $Path"
+        return $null
+    }
+    if ($response.StatusCode -ne 200) { throw "Could not read Machine Configuration resource on '$MachineName' (HTTP $($response.StatusCode))." }
+    return $response.Content | ConvertFrom-Json
 }
 
 function Get-ArcBoxBaselineAssignment {
     param([Parameter(Mandatory)][string]$MachineName, [Parameter(Mandatory)][ValidateSet('Windows', 'Linux')][string]$OS)
 
     $path = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments/Azure${OS}Baseline?api-version=2024-04-05"
-    try {
-        $response = Invoke-AzRestMethod -Method GET -Path $path -ErrorAction Stop
-    } catch {
-        $httpResponse = $_.Exception.PSObject.Properties['Response']
-        if ($null -ne $httpResponse -and $null -ne $httpResponse.Value -and $httpResponse.Value.StatusCode -eq 404) {
-            Write-Host "No $OS audit baseline assignment exists yet on $MachineName."
-            return $null
-        }
-        throw
+    return Get-ArcBoxGuestConfigurationResource -Path $path -MachineName $MachineName
+}
+
+function Get-ArcBoxBaselineReport {
+    param(
+        [Parameter(Mandatory)][string]$MachineName,
+        [Parameter(Mandatory)][ValidateSet('Windows', 'Linux')][string]$OS,
+        [Parameter(Mandatory)][psobject]$Assignment
+    )
+
+    $reportId = $Assignment.properties.latestReportId
+    if ([string]::IsNullOrWhiteSpace($reportId)) { return $null }
+    $machineId = "/subscriptions/$env:subscriptionId/resourceGroups/$env:resourceGroup/providers/Microsoft.HybridCompute/machines/$MachineName"
+    $reportPrefix = "$machineId/providers/Microsoft.GuestConfiguration/guestConfigurationAssignments/Azure${OS}Baseline/reports/"
+    if (-not $reportId.StartsWith($reportPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Baseline report reference on '$MachineName' does not belong to its expected assignment."
     }
-    if ($response.StatusCode -eq 404) {
-        Write-Host "No $OS audit baseline assignment exists yet on $MachineName."
+    $report = Get-ArcBoxGuestConfigurationResource -Path "${reportId}?api-version=2024-04-05" -MachineName $MachineName
+    if ($null -eq $report) { return $null }
+    $machine = Invoke-ArcBoxServerAz -Arguments @('rest', '--method', 'get', '--url', "https://management.azure.com${machineId}?api-version=2024-07-10", '--output', 'json') | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace($machine.properties.vmId)) { throw "Arc machine '$MachineName' has no VM identity for baseline validation." }
+    if ($report.properties.vm.uuid -ne $machine.properties.vmId) {
+        Write-Warning "Ignoring a baseline report from a previous VM identity on $MachineName."
         return $null
     }
-    if ($response.StatusCode -ne 200) { throw "Could not read baseline assignment on '$MachineName' (HTTP $($response.StatusCode))." }
-    return $response.Content | ConvertFrom-Json
+    return $report
 }
 
 function Wait-ArcBoxBaselineReport {
@@ -290,7 +336,10 @@ function Wait-ArcBoxBaselineReport {
     $deadline = (Get-Date).AddMinutes(30)
     do {
         $baseline = Get-ArcBoxBaselineAssignment -MachineName $MachineName -OS $OS
-        if ($baseline.properties.complianceStatus -in @('Compliant', 'NonCompliant')) { return $baseline.properties.complianceStatus }
+        if ($null -ne $baseline) {
+            $report = Get-ArcBoxBaselineReport -MachineName $MachineName -OS $OS -Assignment $baseline
+            if ($report.properties.complianceStatus -in @('Compliant', 'NonCompliant')) { return $report.properties.complianceStatus }
+        }
         Write-Host "Waiting for an evaluated $OS baseline report on $MachineName."
         Start-Sleep -Seconds 30
     } while ((Get-Date) -lt $deadline)
