@@ -80,13 +80,18 @@ if ($debugEnabled -eq "true") {
     [System.Environment]::SetEnvironmentVariable('ErrorActionPreference', "Continue", [System.EnvironmentVariableTarget]::Machine)
 }
 
-# Formatting VMs disk
-$disk = (Get-Disk | Where-Object partitionstyle -eq 'raw')[0]
+# Formatting VMs disk; a rerun after a later failure must not touch the already formatted disk
+$disk = @(Get-Disk | Where-Object partitionstyle -eq 'raw') | Select-Object -First 1
 $driveLetter = "F"
 $label = "VMsDisk"
-$disk | Initialize-Disk -PartitionStyle MBR -PassThru | `
-    New-Partition -UseMaximumSize -DriveLetter $driveLetter | `
-    Format-Volume -FileSystem NTFS -NewFileSystemLabel $label -Confirm:$false -Force
+if ($null -ne $disk) {
+    $disk | Initialize-Disk -PartitionStyle MBR -PassThru | `
+        New-Partition -UseMaximumSize -DriveLetter $driveLetter | `
+        Format-Volume -FileSystem NTFS -NewFileSystemLabel $label -Confirm:$false -Force
+}
+elseif (-not (Test-Path "${driveLetter}:\")) {
+    throw "No raw data disk was found and ${driveLetter}: does not exist; the VMs disk cannot be prepared."
+}
 
 # Creating ArcBox path
 Write-Output "Creating ArcBox path"

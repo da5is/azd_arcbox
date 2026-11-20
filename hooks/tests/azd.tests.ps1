@@ -683,6 +683,43 @@ Describe 'ArcBox prerequisites' {
     }
 }
 
+Describe 'ArcBox bootstrap disk preparation' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $bootstrapAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\Bootstrap.ps1'), [ref]$null, [ref]$null)
+        $statements = $bootstrapAst.EndBlock.Statements
+        $first = @($statements | Where-Object { $_.Extent.Text -like '$disk = *' })[0]
+        $last = @($statements | Where-Object { $_.Extent.Text -like 'if ($null -ne $disk)*' })[0]
+        $diskScript = $bootstrapAst.Extent.Text.Substring($first.Extent.StartOffset, $last.Extent.EndOffset - $first.Extent.StartOffset)
+    }
+
+    It 'formats a raw data disk on the first run' {
+        $script:formatted = 0
+        function Get-Disk { [pscustomobject]@{ PartitionStyle = 'RAW' } }
+        function Initialize-Disk { param([Parameter(ValueFromPipeline)]$InputObject, $PartitionStyle, [switch]$PassThru) process { $InputObject } }
+        function New-Partition { param([Parameter(ValueFromPipeline)]$InputObject, [switch]$UseMaximumSize, $DriveLetter) process { $InputObject } }
+        function Format-Volume { param([Parameter(ValueFromPipeline)]$InputObject, $FileSystem, $NewFileSystemLabel, $Confirm, [switch]$Force) process { $script:formatted++ } }
+        Invoke-Expression $diskScript
+        $script:formatted | Should -Be 1
+    }
+
+    It 'leaves an already formatted disk untouched on a rerun' {
+        $script:formatted = 0
+        function Get-Disk { @() }
+        function Test-Path { $true }
+        function Format-Volume { param([Parameter(ValueFromPipeline)]$InputObject, [switch]$Force) process { $script:formatted++ } }
+        { Invoke-Expression $diskScript } | Should -Not -Throw
+        $script:formatted | Should -Be 0
+    }
+
+    It 'fails explicitly when neither a raw disk nor F: exists' {
+        function Get-Disk { @() }
+        function Test-Path { $false }
+        { Invoke-Expression $diskScript } | Should -Throw '*cannot be prepared*'
+    }
+}
+
 Describe 'ArcBox bootstrap module process isolation' {
     BeforeAll {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
