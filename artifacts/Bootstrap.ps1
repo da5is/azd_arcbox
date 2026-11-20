@@ -137,12 +137,13 @@ Resize-Partition -DriveLetter C -Size $(Get-PartitionSupportedSize -DriveLetter 
     Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
     Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope AllUsers -Force
 
-    Install-PSResource -Name Az.Accounts -Version 5.3.1 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-    Install-PSResource -Name Az.KeyVault -Version 6.4.1 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-    Install-PSResource -Name Az.Compute -Version 11.1.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-    Install-PSResource -Name Az.Resources -Version 9.0.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-    Install-PSResource -Name Az.Storage -Version 9.4.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-    Install-PSResource -Name Microsoft.PowerShell.SecretManagement -Version 1.1.2 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    # PSResourceGet 1.3.1 also searches MicrosoftArtifactRegistry, which reports Not Found for Gallery-only packages.
+    Install-PSResource -Name Az.Accounts -Version 5.3.1 -Repository PSGallery -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.KeyVault -Version 6.4.1 -Repository PSGallery -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.Compute -Version 11.1.0 -Repository PSGallery -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.Resources -Version 9.0.0 -Repository PSGallery -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.Storage -Version 9.4.0 -Repository PSGallery -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Microsoft.PowerShell.SecretManagement -Version 1.1.2 -Repository PSGallery -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
 } 2>&1 | ForEach-Object { "$_" }
 if ($LASTEXITCODE -ne 0) {
     throw "Bootstrap module installation failed (Windows PowerShell exit code $LASTEXITCODE)."
@@ -223,12 +224,21 @@ if ($autoShutdownEnabled -eq "true") {
 Write-Header "Installing PowerShell 7"
 
 $ProgressPreference = 'SilentlyContinue'
-$url = "https://github.com/PowerShell/PowerShell/releases/latest"
-$latestVersion = (Invoke-WebRequest -UseBasicParsing -Uri $url).Content | Select-String -Pattern "v[0-9]+\.[0-9]+\.[0-9]+" | Select-Object -ExpandProperty Matches | Select-Object -ExpandProperty Value
-$downloadUrl = "https://github.com/PowerShell/PowerShell/releases/download/$latestVersion/PowerShell-$($latestVersion.Substring(1,5))-win-x64.msi"
-Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile .\PowerShell7.msi
-Start-Process msiexec.exe -Wait -ArgumentList '/I PowerShell7.msi /quiet ADD_EXPLORER_CONTEXT_MENU_OPENPOWERSHELL=1 ADD_FILE_CONTEXT_MENU_RUNPOWERSHELL=1 ENABLE_PSREMOTING=1 REGISTER_MANIFEST=1 USE_MU=1 ENABLE_MU=1 ADD_PATH=1'
-Remove-Item .\PowerShell7.msi
+# The newest stable GitHub release (7.7.0) publishes no MSI, so select the newest stable release that does.
+$releases = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=30" -Headers @{ 'User-Agent' = 'ArcBox' } -ErrorAction Stop
+$msiAsset = $releases | Where-Object { -not $_.prerelease -and -not $_.draft } | ForEach-Object {
+    $_.assets | Where-Object { $_.name -like 'PowerShell-*-win-x64.msi' } | Select-Object -First 1
+} | Select-Object -First 1
+if ($null -eq $msiAsset) {
+    throw "No stable PowerShell 7 x64 MSI was found in the latest GitHub releases."
+}
+$msiPath = Join-Path $Env:tempDir "PowerShell7.msi"
+Invoke-WebRequest -UseBasicParsing -Uri $msiAsset.browser_download_url -OutFile $msiPath -ErrorAction Stop
+$msiInstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/I `"$msiPath`" /quiet ADD_EXPLORER_CONTEXT_MENU_OPENPOWERSHELL=1 ADD_FILE_CONTEXT_MENU_RUNPOWERSHELL=1 ENABLE_PSREMOTING=1 REGISTER_MANIFEST=1 USE_MU=1 ENABLE_MU=1 ADD_PATH=1"
+if ($msiInstall.ExitCode -notin 0, 3010 -or -not (Test-Path "C:\Program Files\PowerShell\7\pwsh.exe")) {
+    throw "PowerShell 7 installation failed (msiexec exit code $($msiInstall.ExitCode))."
+}
+Remove-Item $msiPath
 
 Copy-Item $PsHome\Profile.ps1 -Destination "C:\Program Files\PowerShell\7\"
 
@@ -243,7 +253,7 @@ Copy-Item $PsHome\Profile.ps1 -Destination "C:\Program Files\PowerShell\7\"
     }
 
     foreach ($module in $modules) {
-        Install-PSResource -Name $module -Scope AllUsers -Quiet -AcceptLicense -TrustRepository
+        Install-PSResource -Name $module -Repository PSGallery -Scope AllUsers -Quiet -AcceptLicense -TrustRepository
     }
 } -args $flavor 2>&1 | ForEach-Object { "$_" }
 if ($LASTEXITCODE -ne 0) {

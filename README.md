@@ -150,6 +150,8 @@ azd 1.37.2 can also report two advisory false positives: unverified role-assignm
 
 If Bootstrap fails at `Connect-AzAccount` with `ManagedIdentityCredential.GetTokenAsync` and `Azure.Identity, Version=1.13.0.0`, check for a package-manager assembly conflict, not an administrator-role problem. PSResourceGet 1.3.1, published November 10, 2026, reproduces this failure when loaded before the pinned Azure modules under Windows PowerShell. Bootstrap now isolates module installation in child processes and checks their exit codes. The corrected installation and authentication sequence succeeded on a retained client, without rerunning provisioning. Publish the changed `artifacts/Bootstrap.ps1` to the configured artifact branch before deployment; a local edit does not update downloaded scripts. For an already failed client, diagnose and resume from a safe checkpoint rather than rerunning Bootstrap's initial disk setup.
 
+If Bootstrap then fails downloading PowerShell 7 ("connection closed unexpectedly" or 404), the cause is upstream: GitHub's latest PowerShell release (7.7.0, November 10, 2026) ships no MSI. Bootstrap now picks the newest stable release that does. If a later step reports `Response returned status code package: Not Found` for Pester or `Azure.Arc.Jumpstart.Common`, PSResourceGet 1.3.1 is also querying the MicrosoftArtifactRegistry repository; Bootstrap now installs from PSGallery explicitly. Both were verified individually on a retained client, not through a full Bootstrap rerun.
+
 ### ITPro Arc server capabilities
 
 The ITPro deployment manages six nested guests. Their Hyper-V names, guest hostnames, and Arc machine names agree:

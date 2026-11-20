@@ -705,10 +705,10 @@ Describe 'ArcBox bootstrap module process isolation' {
 function Install-PackageProvider { param($Name, $MinimumVersion, [switch]$Force) }
 function Install-Module { param($Name, $Scope, [switch]$Force) }
 function Install-PSResource {
-    param($Name, $Version, $Scope, [switch]$Quiet, [switch]$AcceptLicense, [switch]$TrustRepository, [switch]$Reinstall)
+    param($Name, $Version, $Repository, $Scope, [switch]$Quiet, [switch]$AcceptLicense, [switch]$TrustRepository, [switch]$Reinstall)
     if ($Name -eq '__FAIL_MODULE__') { Write-Error 'Injected package installation failure' }
     $global:ArcBoxPackageManagerLoaded = $true
-    Write-Output "INSTALL|$Name|$Version|$PID"
+    Write-Output "INSTALL|$Name|$Version|$Repository|$PID"
 }
 
 '@
@@ -737,6 +737,20 @@ Write-Output 'AUTHENTICATION_REACHED'
         }
     }
 
+    It 'selects the newest stable PowerShell release that publishes an MSI' {
+        $assignment = $bootstrapAst.EndBlock.Statements | Where-Object {
+            $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$msiAsset'
+        }
+        $assignment | Should -Not -BeNullOrEmpty
+        $releases = @(
+            [pscustomobject]@{ prerelease = $false; draft = $false; assets = @([pscustomobject]@{ name = 'PowerShell-7.7.0-win-x64.zip'; browser_download_url = 'zip' }) },
+            [pscustomobject]@{ prerelease = $false; draft = $false; assets = @([pscustomobject]@{ name = 'PowerShell-7.6.10-win-x64.msi'; browser_download_url = 'stable-msi' }) },
+            [pscustomobject]@{ prerelease = $true; draft = $false; assets = @([pscustomobject]@{ name = 'PowerShell-7.8.0-rc.1-win-x64.msi'; browser_download_url = 'preview-msi' }) }
+        )
+        Invoke-Expression $assignment.Extent.Text
+        $msiAsset.browser_download_url | Should -Be 'stable-msi'
+    }
+
     It 'installs pinned authentication modules outside the Bootstrap process' -Skip:(-not $IsWindows) {
         $path = New-BootstrapModuleProbe -Phase 0
         $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $path 2>&1)
@@ -745,7 +759,7 @@ Write-Output 'AUTHENTICATION_REACHED'
         $installs = @($output | Where-Object { "$_" -like 'INSTALL|*' })
         $installs.Count | Should -Be 6
         $childId = ($installs[0] -split '\|')[-1]
-        $installs | Should -Contain "INSTALL|Az.Accounts|5.3.1|$childId"
+        $installs | Should -Contain "INSTALL|Az.Accounts|5.3.1|PSGallery|$childId"
         foreach ($install in $installs) { ($install -split '\|')[-1] | Should -Not -Be $parentId }
         $output | Should -Contain 'AUTHENTICATION_REACHED'
     }
@@ -761,6 +775,7 @@ Write-Output 'AUTHENTICATION_REACHED'
         $installs = @($output | Where-Object { "$_" -like 'INSTALL|*' })
         $installs.Count | Should -Be $Count
         @($installs | Where-Object { "$_" -like 'INSTALL|Az.OperationalInsights|*' }).Count | Should -Be $(if ($Flavor -eq 'ITPro') { 1 } else { 0 })
+        @($installs | Where-Object { ($_ -split '\|')[3] -ne 'PSGallery' }).Count | Should -Be 0
         $output | Should -Contain 'AUTHENTICATION_REACHED'
     }
 
