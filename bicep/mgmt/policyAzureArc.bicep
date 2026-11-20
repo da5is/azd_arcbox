@@ -24,10 +24,12 @@ var computeBaselines = [
   {
     name: 'ArcBox-WindowsBaseline'
     definition: '72650e9f-97bc-4b2a-ab5f-9781a9fcecbc'
+    version: '2.1.*'
   }
   {
     name: 'ArcBox-LinuxBaseline'
     definition: 'fc9b3da7-8347-4380-8e70-0a0361d8dedd'
+    version: '2.3.*'
   }
 ]
 
@@ -36,6 +38,7 @@ resource computeBaselineAssignments 'Microsoft.Authorization/policyAssignments@2
   properties: {
     displayName: '(ArcBox) ${baseline.name} audit'
     policyDefinitionId: tenantResourceId('Microsoft.Authorization/policyDefinitions', baseline.definition)
+    definitionVersion: baseline.version
     parameters: {
       IncludeArcMachines: {
         value: 'true'

@@ -683,6 +683,101 @@ Describe 'ArcBox prerequisites' {
     }
 }
 
+Describe 'ArcBox bootstrap module process isolation' {
+    BeforeAll {
+        $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent
+        $bootstrapAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $arcboxRoot 'artifacts\Bootstrap.ps1'), [ref]$null, [ref]$null)
+        $installStatements = @($bootstrapAst.EndBlock.Statements | Where-Object {
+            $_.Extent.Text.StartsWith('& "$PSHOME\powershell.exe"')
+        })
+        function New-BootstrapModuleProbe {
+            param([int]$Phase, [string]$Flavor = 'ITPro', [string]$FailModule = '')
+
+            if ($installStatements.Count -ne 2) { throw 'Both installation phases must use isolated Windows PowerShell processes.' }
+            $statement = $installStatements[$Phase]
+            $block = $statement.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst]
+            }, $true)
+            $stubs = @'
+
+function Install-PackageProvider { param($Name, $MinimumVersion, [switch]$Force) }
+function Install-Module { param($Name, $Scope, [switch]$Force) }
+function Install-PSResource {
+    param($Name, $Version, $Scope, [switch]$Quiet, [switch]$AcceptLicense, [switch]$TrustRepository, [switch]$Reinstall)
+    if ($Name -eq '__FAIL_MODULE__') { Write-Error 'Injected package installation failure' }
+    $global:ArcBoxPackageManagerLoaded = $true
+    Write-Output "INSTALL|$Name|$Version|$PID"
+}
+
+'@
+            $stubs = $stubs.Replace('__FAIL_MODULE__', $FailModule)
+            $insertion = if ($null -ne $block.ScriptBlock.ParamBlock) {
+                $block.ScriptBlock.ParamBlock.Extent.EndOffset
+            } else {
+                $block.Extent.StartOffset + 1
+            }
+            $text = $statement.Extent.Text.Insert($insertion - $statement.Extent.StartOffset, $stubs)
+            $index = [array]::IndexOf($bootstrapAst.EndBlock.Statements, $statement)
+            $guard = $bootstrapAst.EndBlock.Statements[$index + 1].Extent.Text
+            $probe = @'
+$ErrorActionPreference = 'Continue'
+$flavor = '__FLAVOR__'
+Write-Output "PARENT|$PID"
+'@
+            $probe = $probe.Replace('__FLAVOR__', $Flavor) + "`n$text`n$guard" + @'
+
+if ($global:ArcBoxPackageManagerLoaded) { throw 'Package-manager state leaked into authentication process.' }
+Write-Output 'AUTHENTICATION_REACHED'
+'@
+            $path = Join-Path $TestDrive 'BootstrapModules.ps1'
+            Set-Content -LiteralPath $path -Value $probe
+            return $path
+        }
+    }
+
+    It 'installs pinned authentication modules outside the Bootstrap process' -Skip:(-not $IsWindows) {
+        $path = New-BootstrapModuleProbe -Phase 0
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $path 2>&1)
+        $LASTEXITCODE | Should -Be 0
+        $parentId = ($output | Where-Object { "$_" -like 'PARENT|*' }) -replace '^PARENT\|', ''
+        $installs = @($output | Where-Object { "$_" -like 'INSTALL|*' })
+        $installs.Count | Should -Be 6
+        $childId = ($installs[0] -split '\|')[-1]
+        $installs | Should -Contain "INSTALL|Az.Accounts|5.3.1|$childId"
+        foreach ($install in $installs) { ($install -split '\|')[-1] | Should -Not -Be $parentId }
+        $output | Should -Contain 'AUTHENTICATION_REACHED'
+    }
+
+    It 'preserves isolated flavor-specific dependencies for <Flavor>' -Skip:(-not $IsWindows) -ForEach @(
+        @{ Flavor = 'ITPro'; Count = 6 },
+        @{ Flavor = 'DevOps'; Count = 5 },
+        @{ Flavor = 'DataOps'; Count = 5 }
+    ) {
+        $path = New-BootstrapModuleProbe -Phase 1 -Flavor $Flavor
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $path 2>&1)
+        $LASTEXITCODE | Should -Be 0
+        $installs = @($output | Where-Object { "$_" -like 'INSTALL|*' })
+        $installs.Count | Should -Be $Count
+        @($installs | Where-Object { "$_" -like 'INSTALL|Az.OperationalInsights|*' }).Count | Should -Be $(if ($Flavor -eq 'ITPro') { 1 } else { 0 })
+        $output | Should -Contain 'AUTHENTICATION_REACHED'
+    }
+
+    It 'stops after a child installer failure in phase <Phase>' -Skip:(-not $IsWindows) -ForEach @(
+        @{ Phase = 0; Module = 'Az.Accounts' },
+        @{ Phase = 1; Module = 'Az.ConnectedMachine' }
+    ) {
+        $path = New-BootstrapModuleProbe -Phase $Phase -FailModule $Module
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $path 2>&1)
+        $LASTEXITCODE | Should -Not -Be 0
+        ($output | Out-String) | Should -Match 'Injected package installation failure'
+        ($output | Out-String) | Should -Match 'module installation failed \(Windows PowerShell exit code 1\)'
+        ($output | Out-String) | Should -Not -Match 'Cannot process the XML'
+        $output | Should -Not -Contain 'AUTHENTICATION_REACHED'
+    }
+}
+
 Describe 'ArcBox bootstrap argument binding' {
     BeforeAll {
         $arcboxRoot = Split-Path (Split-Path (Split-Path $PSCommandPath -Parent) -Parent) -Parent

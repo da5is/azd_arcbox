@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "7592347528279047392"
+      "templateHash": "13761233054202927332"
     }
   },
   "parameters": {
@@ -1044,7 +1044,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "14586154415468902994"
+              "templateHash": "5832307717494630305"
             }
           },
           "parameters": {
@@ -1104,11 +1104,13 @@
             "computeBaselines": [
               {
                 "name": "ArcBox-WindowsBaseline",
-                "definition": "72650e9f-97bc-4b2a-ab5f-9781a9fcecbc"
+                "definition": "72650e9f-97bc-4b2a-ab5f-9781a9fcecbc",
+                "version": "2.1.*"
               },
               {
                 "name": "ArcBox-LinuxBaseline",
-                "definition": "fc9b3da7-8347-4380-8e70-0a0361d8dedd"
+                "definition": "fc9b3da7-8347-4380-8e70-0a0361d8dedd",
+                "version": "2.3.*"
               }
             ],
             "policies": [
@@ -1156,6 +1158,7 @@
               "properties": {
                 "displayName": "[format('(ArcBox) {0} audit', variables('computeBaselines')[copyIndex()].name)]",
                 "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', variables('computeBaselines')[copyIndex()].definition)]",
+                "definitionVersion": "[variables('computeBaselines')[copyIndex()].version]",
                 "parameters": {
                   "IncludeArcMachines": {
                     "value": "true"

@@ -629,6 +629,20 @@ Describe 'ITPro management infrastructure and naming' {
         $baselines[0].properties.parameters.IncludeArcMachines.value | Should -Be 'true'
         $baselines[0].properties.resourceSelectors[0].selectors[0].in | Should -Contain 'Microsoft.HybridCompute/machines'
     }
+    It 'pins audit-only baseline definitions rather than the deployment-capable latest versions' {
+        $template = Get-Content (Join-Path $root 'ARM\mgmt\policyAzureArcBuiltins.json') -Raw | ConvertFrom-Json
+        $assignment = $template.resources | Where-Object name -eq "[variables('computeBaselines')[copyIndex()].name]"
+        $assignment.properties.definitionVersion | Should -Be "[variables('computeBaselines')[copyIndex()].version]"
+        $assignment.identity | Should -BeNullOrEmpty
+        $definitions = @($template.variables.computeBaselines)
+        $definitions.Count | Should -Be 2
+        $windows = @($definitions | Where-Object definition -eq '72650e9f-97bc-4b2a-ab5f-9781a9fcecbc')
+        $linux = @($definitions | Where-Object definition -eq 'fc9b3da7-8347-4380-8e70-0a0361d8dedd')
+        $windows.Count | Should -Be 1
+        $linux.Count | Should -Be 1
+        $windows[0].version | Should -Be '2.1.*'
+        $linux[0].version | Should -Be '2.3.*'
+    }
     It 'declares native OTel and inventory streams without collecting file contents' {
         $template = Get-Content (Join-Path $root 'ARM\mgmt\arcServerMonitoring.json') -Raw | ConvertFrom-Json
         $otel = $template.resources | Where-Object name -eq "[format('{0}-OTel', parameters('namingPrefix'))]"

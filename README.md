@@ -142,6 +142,14 @@ Set a longer wait before resuming if needed:
 azd env set JS_ARCBOX_TIMEOUT_MINUTES 720 --environment arcbox-dataops
 ```
 
+### Policy deployment errors and azd warnings
+
+ITPro pins the Windows and Linux compute baseline policy definitions to audit-only minor versions `2.1.*` and `2.3.*` (currently `2.1.1` and `2.3.1`). Azure assignment version references require a wildcard patch segment rather than an exact patch pin. The unversioned built-ins currently resolve to `3.0.0`, which contains an embedded deployment and requires an assignment managed identity even with `AuditIfNotExists` selected. This causes `ResourceIdentityRequired`, unrelated to the deploying user's administrator role. Keep the version pins when updating templates; do not enable remediation or add permissions to work around this error. ARM validation alone can succeed while actual assignment creation fails.
+
+azd 1.37.2 can also report two advisory false positives: unverified role-assignment target scopes, even when subscription Owner covers those scopes, and a reserved-word warning for the supported DCR name `ArcBox-Logs-Windows`. Verify the actual Azure RBAC assignments and deployment errors rather than granting extra access or renaming working resources. Microsoft Entra Global Administrator alone does not grant subscription Owner permissions. The generic "already exists or conflicting state" summary is not the cause when the detailed error is `ResourceIdentityRequired`; do not delete the lab or purge its vault to resolve it. These messages originate in azd, and upgrading to 1.38.0 is not a verified fix. Leave provisioning validation enabled.
+
+If Bootstrap fails at `Connect-AzAccount` with `ManagedIdentityCredential.GetTokenAsync` and `Azure.Identity, Version=1.13.0.0`, check for a package-manager assembly conflict, not an administrator-role problem. PSResourceGet 1.3.1, published November 10, 2026, reproduces this failure when loaded before the pinned Azure modules under Windows PowerShell. Bootstrap now isolates module installation in child processes and checks their exit codes. The corrected installation and authentication sequence succeeded on a retained client, without rerunning provisioning. Publish the changed `artifacts/Bootstrap.ps1` to the configured artifact branch before deployment; a local edit does not update downloaded scripts. For an already failed client, diagnose and resume from a safe checkpoint rather than rerunning Bootstrap's initial disk setup.
+
 ### ITPro Arc server capabilities
 
 The ITPro deployment manages six nested guests. Their Hyper-V names, guest hostnames, and Arc machine names agree:

@@ -129,28 +129,33 @@ Invoke-WebRequest ($templateBaseUrl + "artifacts/PSProfile.ps1") -OutFile $PsHom
 Write-Host "Extending C:\ partition to the maximum size"
 Resize-Partition -DriveLetter C -Size $(Get-PartitionSupportedSize -DriveLetter C).SizeMax
 
-# Installing PowerShell Modules
-Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+# PSResourceGet and Az.Accounts ship incompatible authentication DLLs for Windows PowerShell.
+# Keep package installation out of the process that authenticates to Azure.
+& "$PSHOME\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command {
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+    Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope AllUsers -Force
 
-Install-Module -Name Microsoft.PowerShell.PSResourceGet -Force
-
-# Pin Az-modules after other modules to avoid version conflicts
-# See: https://github.com/microsoft/azure_arc/issues/3359
-Install-PSResource -Name Az.Accounts -Version 5.3.1 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-Install-PSResource -Name Az.KeyVault -Version 6.4.1 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-Install-PSResource -Name Az.Compute -Version 11.1.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-Install-PSResource -Name Az.Resources -Version 9.0.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-Install-PSResource -Name Az.Storage -Version 9.4.0  -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
-Install-PSResource -Name Microsoft.PowerShell.SecretManagement -Version 1.1.2 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.Accounts -Version 5.3.1 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.KeyVault -Version 6.4.1 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.Compute -Version 11.1.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.Resources -Version 9.0.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Az.Storage -Version 9.4.0 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+    Install-PSResource -Name Microsoft.PowerShell.SecretManagement -Version 1.1.2 -Scope AllUsers -Quiet -AcceptLicense -TrustRepository -Reinstall
+} 2>&1 | ForEach-Object { "$_" }
+if ($LASTEXITCODE -ne 0) {
+    throw "Bootstrap module installation failed (Windows PowerShell exit code $LASTEXITCODE)."
+}
 
 # Import the module to ensure the correct version is loaded
-Import-Module Az.Accounts -RequiredVersion 5.3.1 -Force
-Import-Module Az.KeyVault -RequiredVersion 6.4.1 -Force
-Import-Module Az.Resources -RequiredVersion 9.0.0 -Force
+Import-Module Az.Accounts -RequiredVersion 5.3.1 -Force -ErrorAction Stop
+Import-Module Az.KeyVault -RequiredVersion 6.4.1 -Force -ErrorAction Stop
+Import-Module Az.Resources -RequiredVersion 9.0.0 -Force -ErrorAction Stop
 
 $DeploymentProgressString = "Started bootstrap-script..."
 
-Connect-AzAccount -Identity
+Connect-AzAccount -Identity -ErrorAction Stop
 
 $tags = Get-AzResourceGroup -Name $resourceGroup | Select-Object -ExpandProperty Tags
 
@@ -228,13 +233,21 @@ Remove-Item .\PowerShell7.msi
 Copy-Item $PsHome\Profile.ps1 -Destination "C:\Program Files\PowerShell\7\"
 
 
-$modules = @("Az.ConnectedMachine", "Az.ConnectedKubernetes", "Az.CustomLocation", "Azure.Arc.Jumpstart.Common", "Pester")
-if ($flavor -eq "ITPro") {
-    $modules += "Az.OperationalInsights"
-}
+& "$PSHOME\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command {
+    param([string]$flavor)
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+    $modules = @("Az.ConnectedMachine", "Az.ConnectedKubernetes", "Az.CustomLocation", "Azure.Arc.Jumpstart.Common", "Pester")
+    if ($flavor -eq "ITPro") {
+        $modules += "Az.OperationalInsights"
+    }
 
-foreach ($module in $modules) {
-    Install-PSResource -Name $module -Scope AllUsers -Quiet -AcceptLicense -TrustRepository
+    foreach ($module in $modules) {
+        Install-PSResource -Name $module -Scope AllUsers -Quiet -AcceptLicense -TrustRepository
+    }
+} -args $flavor 2>&1 | ForEach-Object { "$_" }
+if ($LASTEXITCODE -ne 0) {
+    throw "Flavor module installation failed (Windows PowerShell exit code $LASTEXITCODE)."
 }
 
 Write-Header "Fetching GitHub Artifacts"
